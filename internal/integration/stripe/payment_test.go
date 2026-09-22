@@ -294,6 +294,8 @@ func (f *checkoutTestPaymentService) GetPayment(_ context.Context, _ string) (*d
 type checkoutTestInvoiceService struct {
 	interfaces.InvoiceService
 	applyDiscountCalls int
+	reconcileCalls     int
+	paymentStatus      types.PaymentStatus
 }
 
 func (f *checkoutTestInvoiceService) ApplyExternalInvoiceDiscount(_ context.Context, _ string, _ dto.ApplyExternalInvoiceDiscountRequest) error {
@@ -307,10 +309,12 @@ func (f *checkoutTestInvoiceService) GetInvoice(_ context.Context, id string) (*
 		AmountDue:       decimal.NewFromInt(80),
 		AmountPaid:      decimal.Zero,
 		AmountRemaining: decimal.NewFromInt(80),
+		PaymentStatus:   f.paymentStatus,
 	}}, nil
 }
 
 func (f *checkoutTestInvoiceService) ReconcilePaymentStatus(_ context.Context, _ string, _ types.PaymentStatus, _ *decimal.Decimal) error {
+	f.reconcileCalls++
 	return nil
 }
 
@@ -328,6 +332,31 @@ func TestHandleFlexPriceCheckoutPayment_DiscountNotAppliedWhenPaymentClaimFails(
 
 	require.Error(t, err)
 	require.Equal(t, 0, invoiceSvc.applyDiscountCalls, "a failed/conflicting payment claim must never apply the discount")
+}
+
+func TestReconcilePaymentWithInvoiceIfNeeded_SkipsWhenInvoiceAlreadyReconciled(t *testing.T) {
+	s := &PaymentService{logger: logger.NewNoopLogger()}
+	payment := &dto.PaymentResponse{ID: "pay_1", Amount: decimal.NewFromInt(100), DestinationID: "inv_1"}
+	invoiceSvc := &checkoutTestInvoiceService{}
+	invoiceSvc.paymentStatus = types.PaymentStatusSucceeded
+	paymentSvc := &checkoutTestPaymentService{payment: payment}
+
+	err := s.ReconcilePaymentWithInvoiceIfNeeded(context.Background(), payment.ID, payment.Amount, paymentSvc, invoiceSvc)
+
+	require.NoError(t, err)
+	require.Equal(t, 0, invoiceSvc.reconcileCalls, "an already-reconciled invoice must not be reconciled again")
+}
+
+func TestReconcilePaymentWithInvoiceIfNeeded_ReconcilesWhenInvoiceStillUnpaid(t *testing.T) {
+	s := &PaymentService{logger: logger.NewNoopLogger()}
+	payment := &dto.PaymentResponse{ID: "pay_1", Amount: decimal.NewFromInt(100), DestinationID: "inv_1"}
+	invoiceSvc := &checkoutTestInvoiceService{}
+	paymentSvc := &checkoutTestPaymentService{payment: payment}
+
+	err := s.ReconcilePaymentWithInvoiceIfNeeded(context.Background(), payment.ID, payment.Amount, paymentSvc, invoiceSvc)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, invoiceSvc.reconcileCalls, "a payment claimed as succeeded but not yet reflected on the invoice must be reconciled")
 }
 
 func TestHandleFlexPriceCheckoutPayment_DiscountAppliedAfterSuccessfulClaim(t *testing.T) {

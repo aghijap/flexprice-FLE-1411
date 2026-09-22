@@ -192,18 +192,31 @@ func (h *Handler) handlePaymentIntentSucceeded(ctx context.Context, event *strip
 			return nil
 		}
 
-		// If payment is already succeeded, verify checkout session completion and return
+		actualAmount := types.FromSmallestUnit(paymentIntent.Amount, string(paymentIntent.Currency))
+
+		// If payment is already succeeded, this is a redelivery: verify that the
+		// invoice was actually reconciled (it may not have been, if a prior delivery
+		// claimed the payment but then failed before reconciling) and that the
+		// checkout session was completed, then return.
 		if payment.PaymentStatus == types.PaymentStatusSucceeded {
 			h.logger.Info(ctx, "FlexPrice payment already succeeded, verifying checkout session completion",
 				"flexprice_payment_id", flexpricePaymentID,
 				"payment_intent_id", paymentIntent.ID,
 				"payment_status", payment.PaymentStatus)
-			_, _ = h.handleCheckoutSessionForPayment(ctx, flexpricePaymentID, paymentIntent.ID, services)
+			if err := h.paymentSvc.ReconcilePaymentWithInvoiceIfNeeded(ctx, payment.ID, actualAmount, services.PaymentService, services.InvoiceService); err != nil {
+				h.logger.Error(ctx, "failed to reconcile already-succeeded payment with invoice",
+					"error", err,
+					"payment_id", payment.ID,
+					"amount", actualAmount.String())
+				return err
+			}
+			if _, err := h.handleCheckoutSessionForPayment(ctx, flexpricePaymentID, paymentIntent.ID, services); err != nil {
+				return err
+			}
 			return nil
 		}
 
 		// Reconcile payment with invoice as fallback if checkout.session.completed was not processed
-		actualAmount := types.FromSmallestUnit(paymentIntent.Amount, string(paymentIntent.Currency))
 		paymentStatus := string(types.PaymentStatusSucceeded)
 		updateReq := dto.UpdatePaymentRequest{
 			PaymentStatus:    &paymentStatus,
@@ -221,13 +234,16 @@ func (h *Handler) handlePaymentIntentSucceeded(ctx context.Context, event *strip
 		}
 
 		if err := h.paymentSvc.ReconcilePaymentWithInvoice(ctx, payment.ID, actualAmount, services.PaymentService, services.InvoiceService); err != nil {
-			h.logger.Error(ctx, "failed to reconcile payment with invoice",
+			h.logger.Error(ctx, "failed to reconcile payment with invoice, returning error so Stripe retries",
 				"error", err,
 				"payment_id", payment.ID,
 				"amount", actualAmount.String())
+			return err
 		}
 
-		_, _ = h.handleCheckoutSessionForPayment(ctx, flexpricePaymentID, paymentIntent.ID, services)
+		if _, err := h.handleCheckoutSessionForPayment(ctx, flexpricePaymentID, paymentIntent.ID, services); err != nil {
+			return err
+		}
 		return nil
 	}
 
@@ -851,24 +867,41 @@ func (h *Handler) handleCheckoutSessionCompleted(ctx context.Context, event *str
 		}
 	}
 
-	// check if payment is already succeeded
+	// check if payment is already succeeded - this is a redelivery, so verify the
+	// invoice was actually reconciled (a prior delivery may have claimed the payment
+	// but failed before reconciling) and the checkout session was completed.
 	if payment.PaymentStatus == types.PaymentStatusSucceeded {
 		h.logger.Info(ctx, "payment already succeeded, verifying checkout session completion", "event_id", event.ID)
-		_, _ = h.handleCheckoutSessionForPayment(ctx, flexpricePaymentID, piID, services)
+		if err := h.paymentSvc.ReconcilePaymentWithInvoiceIfNeeded(ctx, payment.ID, payment.Amount, services.PaymentService, services.InvoiceService); err != nil {
+			h.logger.Error(ctx, "failed to reconcile already-succeeded payment with invoice",
+				"error", err, "payment_id", payment.ID)
+			return err
+		}
+		if _, err := h.handleCheckoutSessionForPayment(ctx, flexpricePaymentID, piID, services); err != nil {
+			return err
+		}
 		return nil
 	}
 
 	// Call HandleFlexPriceCheckoutPayment with optional payment intent
 	err = h.paymentSvc.HandleFlexPriceCheckoutPayment(ctx, &checkoutSession, paymentIntent, payment, services.CustomerService, services.InvoiceService, services.PaymentService)
 	if err != nil {
-		h.logger.Error(ctx, "failed to handle FlexPrice checkout payment, skipping event",
+		h.logger.Error(ctx, "failed to handle FlexPrice checkout payment",
 			"error", err,
 			"flexprice_payment_id", flexpricePaymentID,
 			"event_id", event.ID)
-		return nil
+		if ierr.IsVersionConflict(err) {
+			// The payment was claimed concurrently, most likely by the sibling
+			// payment_intent.succeeded webhook for the same payment. That delivery
+			// owns reconciliation now, so there is nothing left for this one to retry.
+			return nil
+		}
+		return err
 	}
 
-	_, _ = h.handleCheckoutSessionForPayment(ctx, flexpricePaymentID, piID, services)
+	if _, err := h.handleCheckoutSessionForPayment(ctx, flexpricePaymentID, piID, services); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -914,6 +947,10 @@ func (h *Handler) handleCheckoutSessionForPayment(
 					"flexprice_payment_id", flexpricePaymentID,
 					"stripe_payment_intent_id", stripePaymentIntentID,
 				)
+				// Not idempotency-safe to swallow: unlike IsAlreadyExists, this failure means
+				// the session is still pending, so the caller must return the error and let
+				// Stripe redeliver the webhook.
+				return false, err
 			}
 		} else {
 			h.logger.Info(ctx, "completed checkout session from stripe webhook",
@@ -922,7 +959,8 @@ func (h *Handler) handleCheckoutSessionForPayment(
 				"stripe_payment_intent_id", stripePaymentIntentID)
 		}
 	case types.CheckoutStatusExpired, types.CheckoutStatusFailed:
-		h.logger.Warn(ctx, "received stripe payment for expired/failed checkout session",
+		h.logger.Error(ctx, "received stripe payment for expired/failed checkout session",
+			"error", "checkout session status does not accept a completed payment",
 			"session_id", session.ID,
 			"status", session.CheckoutStatus,
 			"flexprice_payment_id", flexpricePaymentID,

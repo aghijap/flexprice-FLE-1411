@@ -2018,13 +2018,12 @@ func (s *PaymentService) HandleFlexPriceCheckoutPayment(
 		}
 	}
 
-	err = s.ReconcilePaymentWithInvoice(ctx, payment.ID, actualAmount, paymentService, invoiceService)
-	if err != nil {
+	reconcileErr := s.ReconcilePaymentWithInvoice(ctx, payment.ID, actualAmount, paymentService, invoiceService)
+	if reconcileErr != nil {
 		s.logger.Error(ctx, "failed to reconcile payment with invoice",
-			"error", err,
+			"error", reconcileErr,
 			"payment_id", payment.ID,
 			"amount", actualAmount.String())
-		// Don't fail the entire webhook processing
 	} else {
 		s.logger.Info(ctx, "successfully reconciled payment with invoice",
 			"payment_id", payment.ID,
@@ -2039,7 +2038,41 @@ func (s *PaymentService) HandleFlexPriceCheckoutPayment(
 			"payment_id", payment.ID)
 	}
 
+	if reconcileErr != nil {
+		// The payment is already claimed as SUCCEEDED, so a redelivery of this webhook
+		// takes the already-succeeded shortcut rather than retrying this step. Fail the
+		// webhook so Stripe redelivers while the failure is still recoverable there.
+		return reconcileErr
+	}
+
 	return nil
+}
+
+// ReconcilePaymentWithInvoiceIfNeeded reconciles a payment with its invoice unless the
+// invoice already reflects it. It exists for webhook redelivery: when a prior delivery
+// claimed the payment as SUCCEEDED but failed before reconciling, the retry lands on an
+// already-succeeded shortcut that must still attempt reconciliation - but only once, since
+// ReconcilePaymentWithInvoice is not itself safe to apply twice for the same payment.
+func (s *PaymentService) ReconcilePaymentWithInvoiceIfNeeded(ctx context.Context, paymentID string, amount decimal.Decimal, paymentService interfaces.PaymentService, invoiceService interfaces.InvoiceService) error {
+	payment, err := paymentService.GetPayment(ctx, paymentID)
+	if err != nil {
+		return err
+	}
+
+	invoiceResp, err := invoiceService.GetInvoice(ctx, payment.DestinationID)
+	if err != nil {
+		return err
+	}
+
+	if invoiceResp.PaymentStatus == types.PaymentStatusSucceeded || invoiceResp.PaymentStatus == types.PaymentStatusOverpaid {
+		s.logger.Debug(ctx, "invoice already reconciled for payment, skipping duplicate reconciliation",
+			"payment_id", paymentID, "invoice_id", payment.DestinationID)
+		return nil
+	}
+
+	s.logger.Info(ctx, "payment succeeded but invoice not yet reconciled, retrying reconciliation",
+		"payment_id", paymentID, "invoice_id", payment.DestinationID)
+	return s.ReconcilePaymentWithInvoice(ctx, paymentID, amount, paymentService, invoiceService)
 }
 
 // AttachPaymentToStripeInvoiceAndReconcile attaches payment to Stripe invoice and reconciles with FlexPrice invoice
