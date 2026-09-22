@@ -396,7 +396,7 @@ type fakeInvoiceService struct {
 	reconciled []string
 }
 
-func (s *fakeInvoiceService) ReconcilePaymentStatus(_ context.Context, id string, _ types.PaymentStatus, _ *decimal.Decimal) error {
+func (s *fakeInvoiceService) ReconcilePaymentStatus(_ context.Context, id string, _ types.PaymentStatus, _ *decimal.Decimal, _ ...string) error {
 	s.reconciled = append(s.reconciled, id)
 	return nil
 }

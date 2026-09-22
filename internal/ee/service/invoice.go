@@ -2061,7 +2061,7 @@ func (s *invoiceService) UpdatePaymentStatus(ctx context.Context, id string, sta
 
 // ReconcilePaymentStatus updates the invoice payment status and amounts for payment reconciliation
 // This method bypasses the payment record validation since it's called during payment processing
-func (s *invoiceService) ReconcilePaymentStatus(ctx context.Context, id string, status types.PaymentStatus, amount *decimal.Decimal) error {
+func (s *invoiceService) ReconcilePaymentStatus(ctx context.Context, id string, status types.PaymentStatus, amount *decimal.Decimal, paymentIDs ...string) error {
 	inv, err := s.InvoiceRepo.Get(ctx, id)
 	if err != nil {
 		return err
@@ -2093,19 +2093,41 @@ func (s *invoiceService) ReconcilePaymentStatus(ctx context.Context, id string, 
 			Mark(ierr.ErrValidation)
 	}
 
+	paymentID := ""
+	if len(paymentIDs) > 0 {
+		paymentID = paymentIDs[0]
+	}
+
+	alreadyApplied := false
+	if paymentID != "" {
+		alreadyApplied = types.IsPaymentAppliedToInvoice(inv.Metadata, paymentID)
+		if alreadyApplied {
+			s.Logger.Info(ctx, "payment ID already applied to invoice, skipping duplicate amount addition",
+				"invoice_id", id,
+				"payment_id", paymentID,
+			)
+		} else {
+			newMeta, err := types.WithPaymentAppliedToInvoice(inv.Metadata, paymentID)
+			if err != nil {
+				return ierr.WithError(err).WithHint("Failed to record applied payment ID").Mark(ierr.ErrSystem)
+			}
+			inv.Metadata = newMeta
+		}
+	}
+
 	now := time.Now().UTC()
 	inv.PaymentStatus = status
 
 	switch status {
 	case types.PaymentStatusPending:
-		if amount != nil {
+		if amount != nil && !alreadyApplied {
 			inv.AmountPaid = inv.AmountPaid.Add(*amount)
 			inv.AmountRemaining = inv.AmountDue.Sub(inv.AmountPaid)
 		}
 	case types.PaymentStatusSucceeded:
-		if amount != nil {
+		if amount != nil && !alreadyApplied {
 			inv.AmountPaid = inv.AmountPaid.Add(*amount)
-		} else {
+		} else if amount == nil && !alreadyApplied {
 			inv.AmountPaid = inv.AmountDue
 		}
 
@@ -2128,7 +2150,7 @@ func (s *invoiceService) ReconcilePaymentStatus(ctx context.Context, id string, 
 
 	case types.PaymentStatusOverpaid:
 		// Handle additional payments to an already overpaid invoice
-		if amount != nil {
+		if amount != nil && !alreadyApplied {
 			inv.AmountPaid = inv.AmountPaid.Add(*amount)
 		}
 		// For overpaid invoices, amount_remaining is always 0
@@ -5126,6 +5148,19 @@ func (s *invoiceService) ApplyExternalInvoiceDiscount(ctx context.Context, invoi
 		inv.Total = inv.Total.Sub(req.DiscountAmount)
 		inv.AmountDue = inv.AmountDue.Sub(req.DiscountAmount)
 		inv.AmountRemaining = inv.AmountRemaining.Sub(req.DiscountAmount)
+
+		if inv.AmountPaid.GreaterThanOrEqual(inv.AmountDue) && inv.AmountDue.IsPositive() &&
+			inv.PaymentStatus != types.PaymentStatusSucceeded && inv.PaymentStatus != types.PaymentStatusOverpaid {
+			if inv.AmountPaid.GreaterThan(inv.AmountDue) {
+				inv.PaymentStatus = types.PaymentStatusOverpaid
+			} else {
+				inv.PaymentStatus = types.PaymentStatusSucceeded
+			}
+			if inv.PaidAt == nil {
+				now := time.Now().UTC()
+				inv.PaidAt = &now
+			}
+		}
 
 		if req.MetadataJSON != "" && req.MetadataKey != "" {
 			if inv.Metadata == nil {

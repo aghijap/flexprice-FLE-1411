@@ -125,7 +125,7 @@ func (webhookTestInvoiceService) GetInvoice(_ context.Context, id string) (*dto.
 	}, nil
 }
 
-func (webhookTestInvoiceService) ReconcilePaymentStatus(_ context.Context, _ string, _ types.PaymentStatus, _ *decimal.Decimal) error {
+func (webhookTestInvoiceService) ReconcilePaymentStatus(_ context.Context, _ string, _ types.PaymentStatus, _ *decimal.Decimal, _ ...string) error {
 	return nil
 }
 

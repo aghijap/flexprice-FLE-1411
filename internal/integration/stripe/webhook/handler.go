@@ -222,6 +222,9 @@ func (h *Handler) handlePaymentIntentSucceeded(ctx context.Context, event *strip
 			PaymentStatus:    &paymentStatus,
 			GatewayPaymentID: &paymentIntent.ID,
 		}
+		if !actualAmount.Equal(payment.Amount) {
+			updateReq.Amount = &actualAmount
+		}
 		if paymentIntent.PaymentMethod != nil {
 			updateReq.PaymentMethodID = &paymentIntent.PaymentMethod.ID
 		}
@@ -867,23 +870,9 @@ func (h *Handler) handleCheckoutSessionCompleted(ctx context.Context, event *str
 		}
 	}
 
-	// check if payment is already succeeded - this is a redelivery, so verify the
-	// invoice was actually reconciled (a prior delivery may have claimed the payment
-	// but failed before reconciling) and the checkout session was completed.
-	if payment.PaymentStatus == types.PaymentStatusSucceeded {
-		h.logger.Info(ctx, "payment already succeeded, verifying checkout session completion", "event_id", event.ID)
-		if err := h.paymentSvc.ReconcilePaymentWithInvoiceIfNeeded(ctx, payment.ID, payment.Amount, services.PaymentService, services.InvoiceService); err != nil {
-			h.logger.Error(ctx, "failed to reconcile already-succeeded payment with invoice",
-				"error", err, "payment_id", payment.ID)
-			return err
-		}
-		if _, err := h.handleCheckoutSessionForPayment(ctx, flexpricePaymentID, piID, services); err != nil {
-			return err
-		}
-		return nil
-	}
-
-	// Call HandleFlexPriceCheckoutPayment with optional payment intent
+	// HandleFlexPriceCheckoutPayment is idempotent: it handles initial payments,
+	// out-of-order events where payment_intent.succeeded ran first, and webhooks
+	// retried by Stripe, applying discounts and reconciling only once.
 	err = h.paymentSvc.HandleFlexPriceCheckoutPayment(ctx, &checkoutSession, paymentIntent, payment, services.CustomerService, services.InvoiceService, services.PaymentService)
 	if err != nil {
 		h.logger.Error(ctx, "failed to handle FlexPrice checkout payment",

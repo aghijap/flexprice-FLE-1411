@@ -1,6 +1,7 @@
 package types
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -36,6 +37,10 @@ const (
 	// InvoiceMetadataKeyCollapsedInvoiceDisplayName is the customer-facing label to use when a
 	// collector clubs the invoice lines into a single amount due item.
 	InvoiceMetadataKeyCollapsedInvoiceDisplayName InvoiceMetadataKey = "collapsed_invoice_display_name"
+
+	// InvoiceMetadataKeyAppliedPaymentIDs is the JSON-encoded list of payment IDs that have been
+	// applied to this invoice during reconciliation, ensuring each payment is credited at most once.
+	InvoiceMetadataKeyAppliedPaymentIDs InvoiceMetadataKey = "applied_payment_ids"
 )
 
 func CollapsedInvoiceDisplayName(md Metadata) string {
@@ -55,6 +60,60 @@ func WithCollapsedInvoiceDisplayName(md Metadata, name string) Metadata {
 	}
 	md[InvoiceMetadataKeyCollapsedInvoiceDisplayName] = name
 	return md
+}
+
+// HasAppliedPaymentIDs reports whether the invoice carries an applied-payment ledger at all.
+//
+// Invoices reconciled before the ledger existed have no such key, so for them
+// IsPaymentAppliedToInvoice cannot distinguish "not yet credited" from "credited
+// before we started recording it". Callers use this to tell the two apart.
+func HasAppliedPaymentIDs(md Metadata) bool {
+	if md == nil {
+		return false
+	}
+	raw, ok := md[InvoiceMetadataKeyAppliedPaymentIDs]
+	return ok && raw != ""
+}
+
+// IsPaymentAppliedToInvoice reports whether paymentID has already been credited towards the invoice.
+func IsPaymentAppliedToInvoice(md Metadata, paymentID string) bool {
+	if md == nil || paymentID == "" {
+		return false
+	}
+	raw, ok := md[InvoiceMetadataKeyAppliedPaymentIDs]
+	if !ok || raw == "" {
+		return false
+	}
+	var ids []string
+	if err := json.Unmarshal([]byte(raw), &ids); err != nil {
+		return false
+	}
+	return lo.Contains(ids, paymentID)
+}
+
+// WithPaymentAppliedToInvoice records paymentID as applied in the invoice metadata.
+func WithPaymentAppliedToInvoice(md Metadata, paymentID string) (Metadata, error) {
+	if paymentID == "" {
+		return md, nil
+	}
+	if md == nil {
+		md = Metadata{}
+	}
+	var ids []string
+	if raw, ok := md[InvoiceMetadataKeyAppliedPaymentIDs]; ok && raw != "" {
+		if err := json.Unmarshal([]byte(raw), &ids); err != nil {
+			return nil, err
+		}
+	}
+	if !lo.Contains(ids, paymentID) {
+		ids = append(ids, paymentID)
+		b, err := json.Marshal(ids)
+		if err != nil {
+			return nil, err
+		}
+		md[InvoiceMetadataKeyAppliedPaymentIDs] = string(b)
+	}
+	return md, nil
 }
 
 // InvoiceCadence defines when an invoice is generated relative to the billing period

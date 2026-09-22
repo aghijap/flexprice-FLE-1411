@@ -84,32 +84,39 @@ const checkoutDiscountMetadataKey = "stripe_checkout_discounts"
 // stripeCheckoutDiscountEntry is one entry in the JSON array stored under
 // Invoice.Metadata[checkoutDiscountMetadataKey].
 type stripeCheckoutDiscountEntry struct {
-	StripeCouponID string    `json:"stripe_coupon_id"`
-	Name           string    `json:"name"`
-	AmountOff      int64     `json:"amount_off,omitempty"`
-	PercentOff     float64   `json:"percent_off,omitempty"`
-	PromotionCode  string    `json:"promotion_code,omitempty"`
-	AppliedAt      time.Time `json:"applied_at"`
+	CheckoutSessionID string    `json:"checkout_session_id,omitempty"`
+	StripeCouponID    string    `json:"stripe_coupon_id"`
+	Name              string    `json:"name"`
+	AmountOff         int64     `json:"amount_off,omitempty"`
+	PercentOff        float64   `json:"percent_off,omitempty"`
+	PromotionCode     string    `json:"promotion_code,omitempty"`
+	AppliedAt         time.Time `json:"applied_at"`
 }
 
 // computeCheckoutDiscount is pure (no Stripe calls) so it's unit-testable directly.
 func computeCheckoutDiscount(session *stripe.CheckoutSession, requestedAmount decimal.Decimal) (discountAmount decimal.Decimal, metadataJSON string, err error) {
 	actualAmount := types.FromSmallestUnit(session.AmountTotal, string(session.Currency))
 	if !actualAmount.LessThan(requestedAmount) {
-		return decimal.Zero, "", nil
+		if session.AmountSubtotal > session.AmountTotal {
+			subtotal := types.FromSmallestUnit(session.AmountSubtotal, string(session.Currency))
+			discountAmount = subtotal.Sub(actualAmount)
+		} else {
+			return decimal.Zero, "", nil
+		}
+	} else {
+		discountAmount = requestedAmount.Sub(actualAmount)
 	}
-
-	discountAmount = requestedAmount.Sub(actualAmount)
 
 	entries := make([]stripeCheckoutDiscountEntry, 0, len(session.Discounts))
 	for _, d := range session.Discounts {
 		entries = append(entries, stripeCheckoutDiscountEntry{
-			StripeCouponID: lo.TernaryF(d.Coupon != nil, func() string { return d.Coupon.ID }, func() string { return "" }),
-			Name:           lo.TernaryF(d.Coupon != nil, func() string { return d.Coupon.Name }, func() string { return "" }),
-			AmountOff:      lo.TernaryF(d.Coupon != nil, func() int64 { return d.Coupon.AmountOff }, func() int64 { return 0 }),
-			PercentOff:     lo.TernaryF(d.Coupon != nil, func() float64 { return d.Coupon.PercentOff }, func() float64 { return 0 }),
-			PromotionCode:  lo.TernaryF(d.PromotionCode != nil, func() string { return d.PromotionCode.Code }, func() string { return "" }),
-			AppliedAt:      time.Now().UTC(),
+			CheckoutSessionID: session.ID,
+			StripeCouponID:    lo.TernaryF(d.Coupon != nil, func() string { return d.Coupon.ID }, func() string { return "" }),
+			Name:              lo.TernaryF(d.Coupon != nil, func() string { return d.Coupon.Name }, func() string { return "" }),
+			AmountOff:         lo.TernaryF(d.Coupon != nil, func() int64 { return d.Coupon.AmountOff }, func() int64 { return 0 }),
+			PercentOff:        lo.TernaryF(d.Coupon != nil, func() float64 { return d.Coupon.PercentOff }, func() float64 { return 0 }),
+			PromotionCode:     lo.TernaryF(d.PromotionCode != nil, func() string { return d.PromotionCode.Code }, func() string { return "" }),
+			AppliedAt:         time.Now().UTC(),
 		})
 	}
 
@@ -118,6 +125,34 @@ func computeCheckoutDiscount(session *stripe.CheckoutSession, requestedAmount de
 		return discountAmount, "", err
 	}
 	return discountAmount, string(metadataBytes), nil
+}
+
+// isCheckoutDiscountApplied checks if the discount for the given checkout session has already been applied to the invoice.
+func isCheckoutDiscountApplied(invMetadata types.Metadata, session *stripe.CheckoutSession) bool {
+	if invMetadata == nil || session == nil {
+		return false
+	}
+	raw, ok := invMetadata[checkoutDiscountMetadataKey]
+	if !ok || raw == "" {
+		return false
+	}
+	var entries []stripeCheckoutDiscountEntry
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if session.ID != "" && entry.CheckoutSessionID == session.ID {
+			return true
+		}
+		if entry.StripeCouponID != "" {
+			for _, d := range session.Discounts {
+				if d.Coupon != nil && d.Coupon.ID == entry.StripeCouponID {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // NewPaymentService creates a new Stripe payment service
@@ -1199,7 +1234,7 @@ func (s *PaymentService) ReconcilePaymentWithInvoice(ctx context.Context, paymen
 		"new_payment_status", newPaymentStatus,
 	)
 
-	err = invoiceService.ReconcilePaymentStatus(ctx, payment.DestinationID, newPaymentStatus, &paymentAmount)
+	err = invoiceService.ReconcilePaymentStatus(ctx, payment.DestinationID, newPaymentStatus, &paymentAmount, paymentID)
 	if err != nil {
 		s.logger.Error(ctx, "failed to update invoice payment status during reconciliation",
 			"error", err,
@@ -1900,7 +1935,8 @@ func paymentIntentCustomerID(paymentIntent *stripe.PaymentIntent) string {
 }
 
 // HandleFlexPriceCheckoutPayment handles payment intents from FlexPrice checkout sessions
-// paymentIntent is optional and can be nil
+// paymentIntent is optional and can be nil. It is idempotent: safe to call for initial
+// payments, out-of-order events where payment_intent.succeeded ran first, and webhooks retried by Stripe.
 func (s *PaymentService) HandleFlexPriceCheckoutPayment(
 	ctx context.Context,
 	session *stripe.CheckoutSession,
@@ -1912,23 +1948,110 @@ func (s *PaymentService) HandleFlexPriceCheckoutPayment(
 ) error {
 	s.logger.Info(ctx, "processing FlexPrice checkout payment",
 		"flexprice_payment_id", payment.ID,
-		"has_payment_intent", paymentIntent != nil)
-
-	// Mark payment as succeeded
-	paymentStatus := string(types.PaymentStatusSucceeded)
-
-	// Update payment record
-	updateReq := dto.UpdatePaymentRequest{
-		PaymentStatus: &paymentStatus,
-	}
+		"has_payment_intent", paymentIntent != nil,
+		"payment_status", payment.PaymentStatus)
 
 	actualAmount := types.FromSmallestUnit(session.AmountTotal, string(session.Currency))
 	if actualAmount.GreaterThan(payment.Amount) {
 		s.logger.Info(ctx, "checkout session captured more than requested, not treating as a discount",
 			"payment_id", payment.ID, "requested", payment.Amount.String(), "captured", actualAmount.String())
 	}
-	if !actualAmount.Equal(payment.Amount) {
-		updateReq.Amount = &actualAmount
+
+	isAlreadySucceeded := payment.PaymentStatus == types.PaymentStatusSucceeded
+
+	if !isAlreadySucceeded {
+		// Mark payment as succeeded
+		paymentStatus := string(types.PaymentStatusSucceeded)
+		updateReq := dto.UpdatePaymentRequest{
+			PaymentStatus: &paymentStatus,
+		}
+		if !actualAmount.Equal(payment.Amount) {
+			updateReq.Amount = &actualAmount
+		}
+
+		if paymentIntent != nil {
+			s.logger.Info(ctx, "processing with payment intent",
+				"payment_intent_id", paymentIntent.ID,
+				"amount", paymentIntent.Amount,
+				"currency", paymentIntent.Currency)
+
+			updateReq.GatewayPaymentID = &paymentIntent.ID
+
+			if paymentIntent.PaymentMethod != nil {
+				paymentMethodID := paymentIntent.PaymentMethod.ID
+				updateReq.PaymentMethodID = &paymentMethodID
+
+				s.logger.Info(ctx, "extracted payment method from payment intent",
+					"payment_intent_id", paymentIntent.ID,
+					"payment_method_id", paymentMethodID)
+			}
+		}
+
+		_, err := paymentService.UpdatePayment(ctx, payment.ID, updateReq)
+		if err != nil {
+			s.logger.Error(ctx, "failed to update payment record",
+				"error", err,
+				"payment_id", payment.ID,
+				"new_status", paymentStatus)
+			return ierr.WithError(err).
+				WithHint("Failed to update payment record").
+				Mark(ierr.ErrSystem)
+		}
+
+		s.logger.Info(ctx, "successfully updated payment record",
+			"payment_id", payment.ID,
+			"new_status", paymentStatus)
+	} else if !actualAmount.Equal(payment.Amount) && s.paymentRepo != nil {
+		// Payment is already succeeded (e.g. claimed by payment_intent.succeeded),
+		// ensure the record reflects the checkout session captured amount.
+		p, err := s.paymentRepo.Get(ctx, payment.ID)
+		if err != nil {
+			s.logger.Error(ctx, "failed to load payment to correct captured amount",
+				"error", err, "payment_id", payment.ID)
+		} else if !p.Amount.Equal(actualAmount) {
+			p.Amount = actualAmount
+			if err := s.paymentRepo.Update(ctx, p); err != nil {
+				// Reconciliation below uses the session amount regardless, so the
+				// invoice still lands correctly; only the payment record is left
+				// showing the pre-checkout figure.
+				s.logger.Error(ctx, "failed to correct payment amount to captured checkout amount",
+					"error", err, "payment_id", payment.ID, "captured_amount", actualAmount.String())
+			}
+		}
+	}
+
+	// Set payment method as default if save_card_and_make_default was requested
+	if paymentIntent != nil && paymentIntent.PaymentMethod != nil && payment.GatewayMetadata != nil {
+		if saveCard, exists := payment.GatewayMetadata["save_card_and_make_default"]; exists && saveCard == "true" {
+			paymentMethodID := paymentIntent.PaymentMethod.ID
+			invoiceResp, err := invoiceService.GetInvoice(ctx, payment.DestinationID)
+			if err != nil {
+				s.logger.Error(ctx, "failed to get invoice for customer ID",
+					"error", err,
+					"payment_id", payment.ID,
+					"invoice_id", payment.DestinationID)
+			} else {
+				s.logger.Info(ctx, "setting payment method as default for customer",
+					"payment_id", payment.ID,
+					"customer_id", invoiceResp.CustomerID,
+					"payment_method_id", paymentMethodID)
+
+				err := s.SetDefaultPaymentMethod(ctx, invoiceResp.CustomerID, paymentMethodID, customerService)
+				if err != nil {
+					s.logger.Error(ctx, "failed to set default payment method",
+						"error", err,
+						"payment_id", payment.ID,
+						"customer_id", invoiceResp.CustomerID,
+						"payment_method_id", paymentMethodID,
+						"payment_intent_customer_id", paymentIntentCustomerID(paymentIntent))
+				} else {
+					s.logger.Info(ctx, "successfully set default payment method",
+						"payment_id", payment.ID,
+						"customer_id", invoiceResp.CustomerID,
+						"payment_method_id", paymentMethodID)
+				}
+			}
+		}
 	}
 
 	discountAmount, discountMetadataJSON, err := computeCheckoutDiscount(session, payment.Amount)
@@ -1937,88 +2060,30 @@ func (s *PaymentService) HandleFlexPriceCheckoutPayment(
 	}
 	hasDiscount := err == nil && discountAmount.IsPositive()
 
-	// If payment intent exists, extract payment method and gateway payment ID
-	if paymentIntent != nil {
-		s.logger.Info(ctx, "processing with payment intent",
-			"payment_intent_id", paymentIntent.ID,
-			"amount", paymentIntent.Amount,
-			"currency", paymentIntent.Currency)
-
-		updateReq.GatewayPaymentID = &paymentIntent.ID
-
-		// Extract payment method ID from payment intent
-		if paymentIntent.PaymentMethod != nil {
-			paymentMethodID := paymentIntent.PaymentMethod.ID
-			updateReq.PaymentMethodID = &paymentMethodID
-
-			s.logger.Info(ctx, "extracted payment method from payment intent",
-				"payment_intent_id", paymentIntent.ID,
-				"payment_method_id", paymentMethodID)
-
-			// Set payment method as default if save_card_and_make_default was requested
-			if payment.GatewayMetadata != nil {
-				if saveCard, exists := payment.GatewayMetadata["save_card_and_make_default"]; exists && saveCard == "true" {
-					// Get customer ID from invoice
-					invoiceResp, err := invoiceService.GetInvoice(ctx, payment.DestinationID)
-					if err != nil {
-						s.logger.Error(ctx, "failed to get invoice for customer ID",
-							"error", err,
-							"payment_id", payment.ID,
-							"invoice_id", payment.DestinationID)
-					} else {
-						s.logger.Info(ctx, "setting payment method as default for customer",
-							"payment_id", payment.ID,
-							"customer_id", invoiceResp.CustomerID,
-							"payment_method_id", paymentMethodID)
-
-						err := s.SetDefaultPaymentMethod(ctx, invoiceResp.CustomerID, paymentMethodID, customerService)
-						if err != nil {
-							s.logger.Error(ctx, "failed to set default payment method",
-								"error", err,
-								"payment_id", payment.ID,
-								"customer_id", invoiceResp.CustomerID,
-								"payment_method_id", paymentMethodID,
-								"payment_intent_customer_id", paymentIntentCustomerID(paymentIntent))
-						} else {
-							s.logger.Info(ctx, "successfully set default payment method",
-								"payment_id", payment.ID,
-								"customer_id", invoiceResp.CustomerID,
-								"payment_method_id", paymentMethodID)
-						}
-					}
-				}
-			}
-		}
-	}
-
-	_, err = paymentService.UpdatePayment(ctx, payment.ID, updateReq)
-	if err != nil {
-		s.logger.Error(ctx, "failed to update payment record",
-			"error", err,
-			"payment_id", payment.ID,
-			"new_status", paymentStatus)
-		return ierr.WithError(err).
-			WithHint("Failed to update payment record").
-			Mark(ierr.ErrSystem)
-	}
-
-	s.logger.Info(ctx, "successfully updated payment record",
-		"payment_id", payment.ID,
-		"new_status", paymentStatus)
-
 	if hasDiscount {
-		applyDiscountReq := dto.ApplyExternalInvoiceDiscountRequest{
-			DiscountAmount: discountAmount,
-			MetadataKey:    checkoutDiscountMetadataKey,
-			MetadataJSON:   discountMetadataJSON,
-		}
-		if err := invoiceService.ApplyExternalInvoiceDiscount(ctx, payment.DestinationID, applyDiscountReq); err != nil {
-			s.logger.Error(ctx, "failed to apply external invoice discount", "error", err, "payment_id", payment.ID)
+		invoiceResp, err := invoiceService.GetInvoice(ctx, payment.DestinationID)
+		if err != nil {
+			s.logger.Error(ctx, "failed to get invoice for discount check", "error", err, "payment_id", payment.ID)
 			return err
 		}
+
+		if !isCheckoutDiscountApplied(invoiceResp.Metadata, session) {
+			applyDiscountReq := dto.ApplyExternalInvoiceDiscountRequest{
+				DiscountAmount: discountAmount,
+				MetadataKey:    checkoutDiscountMetadataKey,
+				MetadataJSON:   discountMetadataJSON,
+			}
+			if err := invoiceService.ApplyExternalInvoiceDiscount(ctx, payment.DestinationID, applyDiscountReq); err != nil {
+				s.logger.Error(ctx, "failed to apply external invoice discount", "error", err, "payment_id", payment.ID)
+				return err
+			}
+		} else {
+			s.logger.Info(ctx, "checkout discount already applied to invoice, skipping duplicate application",
+				"payment_id", payment.ID, "session_id", session.ID)
+		}
 	}
 
-	reconcileErr := s.ReconcilePaymentWithInvoice(ctx, payment.ID, actualAmount, paymentService, invoiceService)
+	reconcileErr := s.ReconcilePaymentWithInvoiceIfNeeded(ctx, payment.ID, actualAmount, paymentService, invoiceService)
 	if reconcileErr != nil {
 		s.logger.Error(ctx, "failed to reconcile payment with invoice",
 			"error", reconcileErr,
@@ -2064,9 +2129,23 @@ func (s *PaymentService) ReconcilePaymentWithInvoiceIfNeeded(ctx context.Context
 		return err
 	}
 
-	if invoiceResp.PaymentStatus == types.PaymentStatusSucceeded || invoiceResp.PaymentStatus == types.PaymentStatusOverpaid {
-		s.logger.Debug(ctx, "invoice already reconciled for payment, skipping duplicate reconciliation",
+	// The ledger is authoritative whenever the invoice has one: it answers for this
+	// payment specifically, where the invoice's own status only says whether the
+	// invoice as a whole looks settled.
+	if types.IsPaymentAppliedToInvoice(invoiceResp.Metadata, paymentID) {
+		s.logger.Debug(ctx, "payment was already applied to invoice, skipping duplicate reconciliation",
 			"payment_id", paymentID, "invoice_id", payment.DestinationID)
+		return nil
+	}
+
+	// Without a ledger the invoice predates it, so a terminal status is the only
+	// evidence there is that the payment may already be credited. Skipping risks
+	// under-crediting; reconciling risks crediting twice, which is worse and cannot
+	// be undone from here.
+	if !types.HasAppliedPaymentIDs(invoiceResp.Metadata) &&
+		(invoiceResp.PaymentStatus == types.PaymentStatusSucceeded || invoiceResp.PaymentStatus == types.PaymentStatusOverpaid) {
+		s.logger.Info(ctx, "invoice has no applied-payment ledger and is already settled, skipping reconciliation",
+			"payment_id", paymentID, "invoice_id", payment.DestinationID, "invoice_payment_status", invoiceResp.PaymentStatus)
 		return nil
 	}
 

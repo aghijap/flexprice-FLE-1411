@@ -296,6 +296,7 @@ type checkoutTestInvoiceService struct {
 	applyDiscountCalls int
 	reconcileCalls     int
 	paymentStatus      types.PaymentStatus
+	metadata           types.Metadata
 }
 
 func (f *checkoutTestInvoiceService) ApplyExternalInvoiceDiscount(_ context.Context, _ string, _ dto.ApplyExternalInvoiceDiscountRequest) error {
@@ -310,10 +311,11 @@ func (f *checkoutTestInvoiceService) GetInvoice(_ context.Context, id string) (*
 		AmountPaid:      decimal.Zero,
 		AmountRemaining: decimal.NewFromInt(80),
 		PaymentStatus:   f.paymentStatus,
+		Metadata:        f.metadata,
 	}}, nil
 }
 
-func (f *checkoutTestInvoiceService) ReconcilePaymentStatus(_ context.Context, _ string, _ types.PaymentStatus, _ *decimal.Decimal) error {
+func (f *checkoutTestInvoiceService) ReconcilePaymentStatus(_ context.Context, _ string, _ types.PaymentStatus, _ *decimal.Decimal, _ ...string) error {
 	f.reconcileCalls++
 	return nil
 }
@@ -347,6 +349,39 @@ func TestReconcilePaymentWithInvoiceIfNeeded_SkipsWhenInvoiceAlreadyReconciled(t
 	require.Equal(t, 0, invoiceSvc.reconcileCalls, "an already-reconciled invoice must not be reconciled again")
 }
 
+func TestReconcilePaymentWithInvoiceIfNeeded_ReconcilesWhenLedgerOmitsThisPayment(t *testing.T) {
+	s := &PaymentService{logger: logger.NewNoopLogger()}
+	payment := &dto.PaymentResponse{ID: "pay_1", Amount: decimal.NewFromInt(100), DestinationID: "inv_1"}
+	// The invoice is settled, but its ledger accounts for a different payment - so
+	// this one has genuinely never been credited and a settled-looking status must
+	// not be read as evidence that it was.
+	invoiceSvc := &checkoutTestInvoiceService{
+		paymentStatus: types.PaymentStatusSucceeded,
+		metadata:      types.Metadata{types.InvoiceMetadataKeyAppliedPaymentIDs: `["pay_other"]`},
+	}
+	paymentSvc := &checkoutTestPaymentService{payment: payment}
+
+	err := s.ReconcilePaymentWithInvoiceIfNeeded(context.Background(), payment.ID, payment.Amount, paymentSvc, invoiceSvc)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, invoiceSvc.reconcileCalls, "a payment missing from an existing ledger must still be credited")
+}
+
+func TestReconcilePaymentWithInvoiceIfNeeded_SkipsWhenPaymentIDAlreadyApplied(t *testing.T) {
+	s := &PaymentService{logger: logger.NewNoopLogger()}
+	payment := &dto.PaymentResponse{ID: "pay_1", Amount: decimal.NewFromInt(100), DestinationID: "inv_1"}
+	invoiceSvc := &checkoutTestInvoiceService{
+		paymentStatus: types.PaymentStatusPending,
+		metadata:      types.Metadata{types.InvoiceMetadataKeyAppliedPaymentIDs: `["pay_1"]`},
+	}
+	paymentSvc := &checkoutTestPaymentService{payment: payment}
+
+	err := s.ReconcilePaymentWithInvoiceIfNeeded(context.Background(), payment.ID, payment.Amount, paymentSvc, invoiceSvc)
+
+	require.NoError(t, err)
+	require.Equal(t, 0, invoiceSvc.reconcileCalls, "a payment already credited in invoice metadata must not be reconciled again even on a pending invoice")
+}
+
 func TestReconcilePaymentWithInvoiceIfNeeded_ReconcilesWhenInvoiceStillUnpaid(t *testing.T) {
 	s := &PaymentService{logger: logger.NewNoopLogger()}
 	payment := &dto.PaymentResponse{ID: "pay_1", Amount: decimal.NewFromInt(100), DestinationID: "inv_1"}
@@ -375,4 +410,35 @@ func TestHandleFlexPriceCheckoutPayment_DiscountAppliedAfterSuccessfulClaim(t *t
 	require.Equal(t, 1, invoiceSvc.applyDiscountCalls)
 	require.NotNil(t, paymentSvc.updatePaymentReq.Amount)
 	require.True(t, decimal.NewFromInt(80).Equal(*paymentSvc.updatePaymentReq.Amount))
+}
+
+func TestHandleFlexPriceCheckoutPayment_AlreadySucceededAppliesDiscountAndSkipsReconciled(t *testing.T) {
+	s := &PaymentService{logger: logger.NewNoopLogger()}
+	session := &stripe.CheckoutSession{
+		ID:             "cs_test_discount",
+		AmountSubtotal: 10000,
+		AmountTotal:    8000,
+		Discounts:      []*stripe.CheckoutSessionDiscount{{Coupon: &stripe.Coupon{ID: "cp_1"}}},
+	}
+	// Payment was claimed as SUCCEEDED by payment_intent.succeeded earlier
+	payment := &dto.PaymentResponse{
+		ID:            "pay_1",
+		Amount:        decimal.NewFromInt(80),
+		PaymentStatus: types.PaymentStatusSucceeded,
+		DestinationID: "inv_1",
+	}
+	invoiceSvc := &checkoutTestInvoiceService{
+		paymentStatus: types.PaymentStatusPending,
+		// payment pay_1 was already credited by payment_intent.succeeded
+		metadata: types.Metadata{types.InvoiceMetadataKeyAppliedPaymentIDs: `["pay_1"]`},
+	}
+	paymentSvc := &checkoutTestPaymentService{payment: payment}
+
+	err := s.HandleFlexPriceCheckoutPayment(context.Background(), session, nil, payment, nil, invoiceSvc, paymentSvc)
+
+	require.NoError(t, err)
+	// Discount must be applied even though payment was already succeeded
+	require.Equal(t, 1, invoiceSvc.applyDiscountCalls, "discount from checkout session must be applied")
+	// Reconcile calls must be 0 because pay_1 is already in applied_payment_ids
+	require.Equal(t, 0, invoiceSvc.reconcileCalls, "payment amount must not be credited again")
 }
