@@ -151,17 +151,21 @@ Three things create invoices in Flexprice, and all three convert the same way:
 - **Wallet top-up** — buying prepaid credits.
 - **One-off invoice** — created directly through the API.
 
-In every case the charge is expressed in its charge currency, converted once into the billing
-currency, and the invoice is issued in the billing currency.
+In every case the invoice is **calculated entirely in the subscription (charge) currency first**:
+charges are rated, prepaid wallet credits are applied, and discounts and adjustments are taken — all
+in the charge currency, on the draft. **Only at finalization is the resulting net converted into the
+customer's billing currency**, and the rate used is frozen onto the invoice at that moment. So a
+draft sits in the charge currency (a billing-currency figure can be shown as a live estimate, but
+the actual conversion is the finalization step).
 
 ```mermaid
 flowchart TD
-    A[Charge in the plan currency, e.g. USD] --> B{Billing currency differs?}
-    B -- No --> C[Invoice in the plan currency. No conversion]
-    B -- Yes --> D[Use the configured rate: subscription then customer then tenant]
-    D --> G[Convert the charges into the billing currency]
-    G --> H[Issue the invoice in the billing currency. Record the rate on it]
-    H --> I[On finalization the rate is frozen and never changes]
+    A[Rate charges in the subscription currency] --> B[Apply prepaid wallet credits, discounts and adjustments — all in the subscription currency]
+    B --> C[Draft invoice, in the subscription currency]
+    C --> D{Billing currency differs?}
+    D -- No --> E[Finalize in the subscription currency. No conversion]
+    D -- Yes --> F[On finalization, convert the net to the billing currency at the configured rate]
+    F --> G[Freeze the rate on the invoice. Amounts never change afterwards]
 ```
 
 These rules keep this safe:
@@ -172,8 +176,9 @@ These rules keep this safe:
   created and the error says what to do — for example, *"No exchange rate configured for USD → INR.
   Set a rate before subscribing this customer to a USD plan."* This catches the gap before any
   usage accrues, rather than at the end of the cycle.
-- **The rate is live while the invoice is a draft and frozen the moment it finalizes.** A draft
-  reflects the current configured rate so it is a useful preview; a finalized invoice is fixed.
+- **The draft stays in the subscription currency; conversion happens once, at finalization.** The
+  rate is applied to the final net — after prepaid credits, discounts and adjustments — and frozen
+  there. A finalized invoice's amounts never move afterwards, whatever the configured rate does.
 - **If no rate is configured, invoice generation still fails and says which pair is missing.**
   Flexprice never falls back to a rate of `1` or guesses a number, because a wrong invoice that has
   already been sent cannot be taken back, while a blocked one can be fixed.
@@ -311,8 +316,8 @@ Refunding an already-paid invoice is the separate path:
 ```mermaid
 flowchart TD
     R[Refund a paid invoice via a credit note] --> T{Refund target}
-    T -- Prepaid wallet --> RW[Charge-currency wallet credit, converted back at the invoice frozen rate]
-    T -- Back to source --> RS[Returned to the card or bank via the gateway, in the billing currency, at the invoice frozen rate]
+    T -- Prepaid wallet --> RW[Charge-currency wallet credit, at the rate resolved at refund time]
+    T -- Back to source --> RS[Returned to the card or bank via the gateway, in the billing currency, at the rate resolved at refund time]
     RS --> REM[Anything beyond what the gateway was paid spills to the wallet]
 ```
 
@@ -323,12 +328,15 @@ The rule behind both diagrams:
 | Net credit paid to the wallet | No | — (stays in the charge currency) |
 | Net charge raised as a settlement invoice | Yes | the current configured rate |
 | Wallet credit later offsets usage | Only the residual | that later invoice's own rate |
-| Refund credit note → wallet or back to source | Reuses a stored rate | the **frozen rate of the invoice being reversed** |
+| Refund credit note → wallet or back to source | Yes | the rate **resolved at refund time** (= the original while rates are fixed) |
 | Change scheduled for period end | No | — |
 
-In one line: **a genuinely new charge uses the current rate; anything that reverses an existing
-invoice reuses that invoice's frozen rate; and money that stays in the charge-currency wallet does
-not convert at all.**
+In one line: **new charges, proration, and refunds all use the rate resolved at that moment; only a
+finalized invoice keeps its own frozen rate for its own amounts; and money that stays in the
+charge-currency wallet does not convert at all.** While rates are fixed (the model today), the rate
+resolved at a refund equals the one the original invoice used, so nothing deviates. If dynamic FX
+rates are ever introduced, a refund could resolve a different rate than the original invoice and
+deviate by the difference — an accepted, known trade-off.
 
 **Worked example — downgrade (net credit → wallet).** A $120/month plan, customer billed in INR;
 halfway through the month they downgrade to $60/month.
@@ -344,11 +352,11 @@ $120/month halfway through.
 - Net = **$30 charge → converted at the current rate** (say 100) → a **₹3,000 settlement invoice**
   in the billing currency.
 
-**Worked example — refund to card.** A customer paid a **₹8,300** invoice (a $100 charge frozen at
-83). To return it, a refund credit note is raised. **Back to source** returns **₹8,300** to their
-card via the gateway at the frozen rate 83; **to wallet** instead credits **$100** to their USD
-wallet (₹8,300 ÷ 83). Either way it nets exactly against what was charged, because it reuses the
-invoice's frozen rate.
+**Worked example — refund to card.** A customer paid a **₹8,300** invoice ($100 at a rate of 83). To
+return it, a refund credit note is raised using the rate **resolved at refund time**. While that
+rate is still 83, **back to source** returns **₹8,300** to their card via the gateway, and **to
+wallet** credits **$100** to their USD wallet (₹8,300 ÷ 83) — netting exactly against the original.
+Only if the resolved rate had moved (dynamic rates) would the returned amount differ from ₹8,300.
 
 ---
 
@@ -383,6 +391,11 @@ its own.
 This is the pattern throughout: an invoice's currency is fixed when it is generated, and every
 downstream consumer — accounting sync, payments, reporting — reads that currency and the recorded
 rate rather than re-deriving either.
+
+Those systems bind each customer to a single currency, so the invoice's currency must match the
+currency of the mapped customer in the ERP. **If it does not, the sync fails** — Flexprice does not
+convert the document or force it onto a mismatched customer. This is why a customer billed in more
+than one currency needs a separate ERP customer per currency.
 
 ---
 
@@ -429,9 +442,10 @@ Without this, the new-currency invoices have no valid customer to sync to.
 
 ## Edge cases
 
-- **Reversals net to zero.** A credit note reuses the frozen rate of the invoice it reverses, so it
-  cancels exactly against the original charge. A downgrade credit is different — it goes to the
-  wallet in the charge currency and does not convert at all.
+- **Reversals use the rate resolved at reversal time.** A credit note converts at the rate configured
+  then — equal to the original invoice's rate while rates are fixed, so it nets to zero; under future
+  dynamic rates it could deviate. A downgrade credit is different again: it goes to the wallet in the
+  charge currency and does not convert at all.
 - **Rounding is absorbed, not dropped.** Converted line items always add up to the converted
   invoice total; any sub-unit remainder is absorbed into the invoice rather than lost.
 - **Wallet leftover "dust" is written off.** A tiny residual balance (for example under ₹1) is
