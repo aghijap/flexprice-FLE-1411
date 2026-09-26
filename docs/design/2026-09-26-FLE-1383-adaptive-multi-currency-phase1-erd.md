@@ -575,14 +575,52 @@ Everything downstream sees an INR invoice and needs no FX knowledge:
 | `POST_PAID` wallet payment | Only an INR postpaid wallet is a candidate | `GetWalletsForPayment` matches `inv.Currency` (G22 keeps such wallets in the billing currency) |
 | `PRE_PAID` wallet | Never a payment candidate; already applied in step 3 | `GetWalletsForPayment` is postpaid-only |
 | Ongoing balance of a USD prepaid wallet | Draft counted while `usd`; not counted once `inr`; the wallet was debited in step 3 | `GetUnpaidInvoicesToBePaid` matches `inv.Currency` |
-| Adjustment / refund credit notes | INR, bounded by INR `amount_paid` | `Currency: inv.Currency` ([dto/creditnote.go:91](../../internal/api/dto/creditnote.go#L91)) |
-| Refund to source | INR through the gateway | `row.Currency = inv.Currency` |
+| Adjustment / refund credit notes | INR, bounded by INR `amount_paid` — §4.5 | `Currency: inv.Currency` ([dto/creditnote.go:91](../../internal/api/dto/creditnote.go#L91)) |
+| Refund to source | INR through the gateway — §4.5 | `row.Currency = inv.Currency` |
 | Void | See G25 — the prepaid portion must return in the charge currency | The one downstream path that needs a branch |
 | ERP sync | INR invoice, frozen rate sent | §7 |
 | Recalculation of a finalized invoice | Voids and creates a new draft in the charge currency, which converts at its own finalize | [`RecalculateInvoice`, invoice.go:3883](../../internal/ee/service/invoice.go#L3883); in-place `RecalculateInvoiceV2` is draft-only |
 
 Two invoices for one customer priced in USD and EUR each convert independently into INR; the
 customer receives two INR invoices, never a mixed one (PRD "Multiple subscriptions").
+
+### 4.5 Credit notes and refunds on a converted invoice
+
+A credit note is a document against a finalized invoice, in that invoice's currency
+(`Currency: inv.Currency`, [dto/creditnote.go:91](../../internal/api/dto/creditnote.go#L91)), with
+lines that reference the invoice's line items and carry amounts in the same currency
+([`CreateCreditNoteLineItemRequest`, dto/creditnote.go:110-116](../../internal/api/dto/creditnote.go#L110)).
+A converted invoice is an INR invoice, so its credit notes are INR documents and the ledger bounds
+of the refund design hold in INR unchanged. **Nothing new is stored on `credit_notes`,
+`credit_note_line_items` or `refunds`.** Where FX enters is one leg only:
+
+| Path | Currency and bound | FX | Phase |
+| --- | --- | --- | --- |
+| Adjustment credit note (unpaid invoice) | INR; reduces `amount_due`; `≤ total − adjustment_amount − amount_paid` | none | 1 — unchanged |
+| Refund credit note, `BACK_TO_SOURCE` | INR rows against INR payments, `≤ amount_paid − refunded_amount`, to the gateway in INR | none | 1 — unchanged |
+| Refund credit note, `PREPAID_WALLET` | Phase 1: rejected (G30). Phase 2: `amount ÷ rate` resolved **at refund time** for the invoice's pair, credited to the **charge-currency** wallet | the one converting leg — [Phase 2 §4.2](2026-09-26-FLE-1383-adaptive-multi-currency-phase2-erd.md) | 1 reject / 2 |
+| Gateway failure → wallet fallback | Phase 1: billing-currency wallet row, as today. Phase 2: rerouted through the same division | Phase 2 §4.3 | 1 / 2 |
+| Void | Paid portion INR to an INR wallet; prepaid portion in the charge currency from `fx_conversion.source` (G25) | none — snapshot | 1 |
+
+**A clarification of the PRD.** The PRD says a back-to-source refund uses *"the rate resolved at
+refund time"*. Under this design a back-to-source refund involves no rate at all: the invoice, its
+payments and the credit note are all in the billing currency, and a gateway returns what it
+captured, in the currency it captured it. Expressing the refund in the charge currency and
+converting at a refund-time rate would, under any rate movement, either exceed `amount_paid` —
+rejected by both the ledger bound and the gateway — or short the customer. So the wallet leg is the
+only one that converts, and it divides by the rate resolved at refund time exactly as the PRD's
+worked example does (₹8,300 ÷ 83 = $100). While rates are fixed the two readings give identical
+numbers; the design keeps the one that stays correct if they ever move.
+
+**Raising the credit note.** Support thinks in the plan's currency — *"refund one month, $100"* —
+while the document is in INR. Each converted line carries `fx_conversion.source_amount`, so the
+credit-note UI shows both figures, and `CreateCreditNoteLineItemRequest` may accept an optional
+`source_amount` that the service converts at the **parent invoice's frozen rate** — never a fresh
+resolution — into the `amount` it stores and bounds. A frozen-rate conversion of a source amount
+can never exceed the line's INR amount, so the existing per-line bound still closes it. The credit
+note API response carries the parent's `fx_conversion` read-through, not stored, so the rate is
+visible beside the credit. There is no credit-note ERP sync or PDF today; if either is added it
+carries the parent invoice's frozen rate, not a new one.
 
 ---
 
@@ -920,6 +958,16 @@ Extend the existing service test files — `invoice_test.go`, `subscription_test
 | T33 | Refund CN to wallet on a converted invoice | rejected in Phase 1 (G30); `BACK_TO_SOURCE` works in INR |
 | T34 | Delete the only rate a live subscription depends on | 409 listing the dependant (G4); delete of a shadowed rate succeeds |
 | T35 | `resolve` and finalize over one fixture | identical rate and scope |
+
+**Credit notes**
+
+| # | Case | Expect |
+| --- | --- | --- |
+| T40 | Adjustment credit note on a converted invoice | INR document; `amount_due` reduced in INR; bound checked in INR |
+| T41 | Refund credit note, `BACK_TO_SOURCE`, on a converted invoice paid ₹8,300 | one INR gateway row for ₹8,300; no rate resolved (assert no `fx_rates` read) |
+| T42 | Refund credit note with `source_amount: 50.00` on a line converted at 83 | stored `amount` ₹4,150.00 from the frozen rate, even if the live rate is now 85 |
+| T43 | `source_amount` exceeding the line's source amount | rejected by the existing per-line bound |
+| T44 | Credit note response | includes the parent's `fx_conversion` read-through; nothing new persisted |
 
 **Egress**
 
