@@ -25,8 +25,7 @@ Plans, prices, subscriptions, wallets, usage and entitlements stay in the charge
 | --- | --- |
 | `customers.billing_currency` | New nullable column |
 | `fx_rates` | New table |
-| `invoices.fx_conversion` | New nullable jsonb |
-| `invoice_line_items.fx_conversion` | New nullable jsonb. Optional, see §2.4 and open question 2 |
+| `invoices.fx_conversion` | New nullable jsonb. Invoice level only; lines share the invoice's rate (§2.4) |
 | `entity_integration_mappings.currency` | New column, default `''` |
 
 **Code changes:** one new step in invoice finalization (§4.2), a rate lookup (§3), guardrails (§5),
@@ -182,13 +181,12 @@ erDiagram
         numeric      total
         numeric      amount_due
         jsonb        custom_currency "existing — tenant custom currency"
-        jsonb        fx_conversion "NEW nullable — original currency, frozen rate, original amounts"
+        jsonb        fx_conversion "NEW nullable — original currency, frozen rate, original amounts, rounding"
     }
     INVOICE_LINE_ITEMS {
         varchar(50)  id PK
-        varchar(10)  currency "= invoice.currency"
-        numeric      amount
-        jsonb        fx_conversion "NEW nullable, optional — original amount, rounding adjustment"
+        varchar(10)  currency "= invoice.currency (unchanged)"
+        numeric      amount "converted at the invoice's rate"
     }
     WALLETS {
         varchar(50)  id PK
@@ -296,7 +294,7 @@ UUID_PREFIX_FX_RATE = "fxr"
 | No live-rate or feed columns | Out of scope. A feed later is a change to the lookup, not to this table |
 | Partial unique index on published rows | Exactly one live rate per scope and pair. Same pattern as `settings` |
 
-### 2.4 `invoices.fx_conversion` and `invoice_line_items.fx_conversion`
+### 2.4 `invoices.fx_conversion`
 
 ```go
 // internal/types/fx_conversion.go
@@ -311,6 +309,10 @@ type FXConversion struct {
     Scope           FXRateScope     `json:"scope"`    // scope the rate was found at
     ConvertedAt     time.Time       `json:"converted_at"`
     Source          FXSourceAmounts `json:"source"`
+
+    // Rounding difference added to one line so the lines add up to the net (§4.3). Usually 0.
+    RoundingAdjustment decimal.Decimal `json:"rounding_adjustment"`
+    RoundingLineItemID string          `json:"rounding_line_item_id,omitempty"`
 }
 
 type FXSourceAmounts struct {
@@ -319,23 +321,11 @@ type FXSourceAmounts struct {
     TotalPrepaidCreditsApplied decimal.Decimal `json:"total_prepaid_credits_applied"`
     Net                        decimal.Decimal `json:"net"` // subtotal − discount − credits, before tax
 }
-
-// Optional. See "Why two columns" below.
-type FXLineConversion struct {
-    ChargeCurrency              string          `json:"charge_currency"`
-    Rate                        decimal.Decimal `json:"rate"`
-    SourceAmount                decimal.Decimal `json:"source_amount"`
-    SourceLineItemDiscount      decimal.Decimal `json:"source_line_item_discount"`
-    SourceInvoiceLevelDiscount  decimal.Decimal `json:"source_invoice_level_discount"`
-    SourcePrepaidCreditsApplied decimal.Decimal `json:"source_prepaid_credits_applied"`
-    RoundingAdjustment          decimal.Decimal `json:"rounding_adjustment"` // usually 0
-}
 ```
 
 ```go
-// ent/schema/invoice.go, ent/schema/invoice_line_item.go
+// ent/schema/invoice.go
 field.JSON("fx_conversion", &types.FXConversion{}).Optional().SchemaType(pg("jsonb")),
-field.JSON("fx_conversion", &types.FXLineConversion{}).Optional().SchemaType(pg("jsonb")),
 ```
 
 **Rules**
@@ -346,24 +336,26 @@ field.JSON("fx_conversion", &types.FXLineConversion{}).Optional().SchemaType(pg(
   after conversion. `fx_conversion.charge_currency` keeps the original.
 - Source amounts exclude tax.
 
-**Why two columns.** The invoice column is required. The line column is not.
+**Invoice level only.** Every line on an invoice is converted at the same rate, so the rate and the
+original amounts are stored once, on the invoice. `invoice_line_items` gets no new column. Every
+reader uses the invoice:
 
-| Reader | Uses the invoice column | Uses the line column |
-| --- | --- | --- |
-| Finalize retry check (G16) | Yes | No |
-| Void: return prepaid credits in the charge currency (G25) | `source.total_prepaid_credits_applied` | No |
-| ERP sync rate (§7) | `rate` | No |
-| API, webhooks, PDF: "₹8,300 converted from $100 at 83" | Yes | Only to show each line's exact original amount |
-| Credit note created from a USD amount (§4.5) | `rate` | No. The limit is checked on the INR line amount |
-| Phase 2 top-up stamp and refunds | Yes | No |
-| Which line absorbed the rounding difference | No | `rounding_adjustment` |
+| Reader | Field used |
+| --- | --- |
+| Finalize retry check (G16) | Whole object: set means already converted |
+| Void: return prepaid credits in the charge currency (G25) | `source.total_prepaid_credits_applied` |
+| ERP sync rate (§7) | `rate` |
+| API, webhooks, PDF: "₹8,300 converted from $100 at 83" | `rate`, `charge_currency`, `source` |
+| Credit note created from a USD amount (§4.5) | `rate`. The limit is checked on the INR line amount |
+| Phase 2 top-up stamp and refunds | Whole object |
+| Which line absorbed the rounding difference | `rounding_adjustment`, `rounding_line_item_id` |
 
-The line column only lets each line show its exact original amount. Without it, a line's original
-amount can be shown as `amount ÷ rate`, which can be off by one unit of rounding on the line that
-absorbed the difference, or when the rate is below 1. Keeping or dropping it is open question 2.
+A line's original amount, when a screen needs it, is shown as `amount ÷ rate`. This matches the
+original exactly except by one rounding unit on the line named in `rounding_line_item_id`, or when
+the rate is below 1. It is a display value only; no calculation uses it.
 
-**Persistence.** The invoice and line repositories list columns by hand in `Create`,
-`CreateWithLineItems` and `Update`, and the in-memory test stores copy fields one by one.
+**Persistence.** The invoice repository lists columns by hand in `Create`, `CreateWithLineItems`
+and `Update`, and the in-memory test store copies fields one by one.
 `custom_currency` was lost on write twice because of this
 ([tenant-custom-currency §4 step 3](2026-08-27-FLE-1201-tenant-custom-currency.md)). Add
 `fx_conversion` in all of them, add a round-trip test, and make `Update` keep the value, never
@@ -598,7 +590,7 @@ net_c     = subtotal_c − total_discount_c − total_prepaid_credits_applied_c
 net_b     = conv(net_c)                  ← source of truth: what the customer owes before tax
 residual  = net_b − Σ line_net_b
 if residual ≠ 0: add it to amount_b of the line with the largest |line_net_b|
-                 (record it as that line's rounding_adjustment)
+                 and record it in fx_conversion.rounding_adjustment and rounding_line_item_id
 
 subtotal_b                      = Σ amount_b
 total_discount_b                = Σ (line_disc_b + inv_disc_b)
@@ -628,7 +620,8 @@ if net_c ≠ 0 and net_b == 0 → ErrInternal "rate is too small for the billing
 | Sum of lines | 100.00 | | 14938 |
 | **Net** | 100.00 | 14937.00 | **14937** |
 
-The difference is −1, so line C becomes 4979. The lines now add up to 14937. For currencies with two
+The difference is −1, so line C becomes 4979. The lines now add up to 14937. The invoice records
+`rounding_adjustment: -1` and `rounding_line_item_id` = line C. For currencies with two
 decimals the difference is usually zero, and at most ±0.01.
 
 **What is converted**
@@ -912,11 +905,11 @@ GET    /v1/fx-rates/resolve      from, to, customer_id?, subscription_id? read
   "fx_conversion": {
     "charge_currency": "usd", "billing_currency": "inr", "rate": "83", "rate_id": "fxr_…",
     "scope": "customer", "converted_at": "2026-10-01T00:05:12Z",
-    "source": { "subtotal": "100.00", "total_discount": "0", "total_prepaid_credits_applied": "0", "net": "100.00" }
+    "source": { "subtotal": "100.00", "total_discount": "0", "total_prepaid_credits_applied": "0", "net": "100.00" },
+    "rounding_adjustment": "0"
   },
   "line_items": [
-    { "amount": "8300.00", "currency": "inr",
-      "fx_conversion": { "charge_currency": "usd", "rate": "83", "source_amount": "100.00", "rounding_adjustment": "0" } }
+    { "amount": "8300.00", "currency": "inr" }   // lines unchanged in shape; converted at the invoice's rate
   ]
 }
 
@@ -936,7 +929,7 @@ subscription previews.
 
 | Surface | Shows | How |
 | --- | --- | --- |
-| `GET /v1/invoices/:id`, list, search | `fx_conversion` on the invoice, and on each line if kept | `InvoiceResponse` and `InvoiceLineItemResponse` gain the field |
+| `GET /v1/invoices/:id`, list, search | `fx_conversion` on the invoice | `InvoiceResponse` gains the field. Line item responses do not change |
 | Invoice webhooks: `invoice.update.finalized`, `invoice.update.payment`, `invoice.update.voided`, `invoice.update` | Same block | The payload builder wraps the `GetInvoice` response ([payload/invoice.go:27-72](../../internal/webhook/payload/invoice.go#L27)), so the new field appears with no builder change |
 | Invoice PDF | The original amount and the rate, for example *"₹8,300.00 (converted from $100.00 at 83.00)"*, and a note naming the pair | `pdf.InvoiceData` ([domain/pdf/model.go:11](../../internal/domain/pdf/model.go#L11)) gains `ChargeCurrency`, `FXRate`, `SourceSubtotal`, `SourceNet`, filled where the builder maps totals ([invoice.go:3147-3186](../../internal/ee/service/invoice.go#L3147)). Shown only when `FXRate` is set |
 | Customer portal | Same as the PDF | Reads the API |
@@ -1072,7 +1065,7 @@ Extend `invoice_test.go`, `subscription_test.go`, `customer_test.go`, `wallet_te
 | # | Case | Expected |
 | --- | --- | --- |
 | T9 | Lines add up exactly | No rounding adjustment |
-| T10 | Difference of ±1 (JPY example) | Largest line absorbs it; all checks pass |
+| T10 | Difference of ±1 (JPY example) | Largest line absorbs it; `rounding_adjustment` and `rounding_line_item_id` saved on the invoice; all checks pass |
 | T11 | Three-decimal currency (KWD) | Rounded to 3 decimals; all checks pass |
 | T12 | Negative line (credit line on a settlement invoice) | Size used to pick the largest line; sign kept |
 | T13 | Discounts and prepaid credits present | `subtotal − discount − credits == net` after conversion |
@@ -1120,7 +1113,7 @@ Extend `invoice_test.go`, `subscription_test.go`, `customer_test.go`, `wallet_te
 | T40 | Adjustment credit note on a converted invoice | INR; `amount_due` reduced in INR; limit checked in INR |
 | T41 | Refund credit note, `BACK_TO_SOURCE`, invoice paid ₹8,300 | One INR gateway row for ₹8,300; no rate looked up |
 | T42 | Refund credit note with `source_amount: 50.00` on a line converted at 83 | Saved `amount` ₹4,150.00 from the frozen rate, even if the live rate is now 85 |
-| T43 | `source_amount` larger than the line | Rejected by the existing per-line limit |
+| T43 | `source_amount` that converts to more than the line's INR amount | Rejected by the existing per-line limit |
 | T44 | Credit note response | Includes the invoice's `fx_conversion`; nothing new saved |
 
 **Integration sync**
@@ -1142,7 +1135,7 @@ Extend `invoice_test.go`, `subscription_test.go`, `customer_test.go`, `wallet_te
 | --- | --- | --- |
 | 1 | `CREATE TABLE fx_rates` with `Idx_fx_rate_live_key` (partial, `status = 'published'`) and `Idx_fx_rate_pair` | Yes. Nothing reads it |
 | 2 | `ALTER TABLE customers ADD COLUMN billing_currency varchar(10) NULL` | Yes. Nullable and unused until set |
-| 3 | `ALTER TABLE invoices ADD COLUMN fx_conversion jsonb NULL`, same on `invoice_line_items` if kept | Yes |
+| 3 | `ALTER TABLE invoices ADD COLUMN fx_conversion jsonb NULL` | Yes |
 | 4 | `ALTER TABLE entity_integration_mappings ADD COLUMN currency varchar(10) NOT NULL DEFAULT ''`, and recreate the unique index with it. Ent does not drop the old index, so write the drop by hand as `V5__settings_unique_published_only.up.sql` did | Yes |
 | 5 | Deploy the code. Nothing changes for any customer until a `billing_currency` is set | Setting a billing currency is what changes that customer's next invoice |
 
@@ -1187,21 +1180,15 @@ rates early. PR 4 is the release.
    step 8 uses it for the taxable base, and the commercial rate still sets `amount_due`. The schema
    allows it; the PDF layout would need a new line. Needs a finance contact at a launch customer
    before Phase 2.
-2. **Keep the line-level `fx_conversion`?** No flow needs it (§2.4). It only lets each line show its
-   exact original amount. Dropping it removes one jsonb column on `invoice_line_items`, the line
-   repository changes and part of the round-trip tests. The rounding adjustment would then move to
-   the invoice snapshot as `rounding_adjustment` and `rounding_line_item_id`, and line originals
-   would be shown as `amount ÷ rate`. Recommendation: drop it, unless per-line exact originals are a
-   product requirement.
-3. **`auto_invoice_threshold`** is compared with unbilled usage in the charge currency, which is
+2. **`auto_invoice_threshold`** is compared with unbilled usage in the charge currency, which is
    correct. Its API docs should say it is not in the billing currency.
-4. **Gateway customers.** Razorpay and Stripe can take a payment in any supported currency. Stripe
+3. **Gateway customers.** Razorpay and Stripe can take a payment in any supported currency. Stripe
    Billing customers lock their currency, but Flexprice, not Stripe Billing, drives payments for
    converted invoices. Confirm this for the checkout and saved-card flows.
-5. **Analytics.** Revenue analytics add `TotalCost` across items without checking currency, and
+4. **Analytics.** Revenue analytics add `TotalCost` across items without checking currency, and
    label the sum with the first subscription's currency. This feature neither fixes nor worsens that.
    A reporting currency using `fx_rates` is the later fix.
-6. **Plan change v1 excess credit.** `OpeningInvoiceAdjustmentAmount` applies only to fixed lines and
+5. **Plan change v1 excess credit.** `OpeningInvoiceAdjustmentAmount` applies only to fixed lines and
    logs any excess ([billing.go:309-321](../../internal/ee/service/billing.go#L309)). This is not
    related to FX. Noted so it is not blamed on conversion.
 
