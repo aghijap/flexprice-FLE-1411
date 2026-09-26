@@ -157,6 +157,23 @@ The credit amount at step 4 is read from the pending transaction created at step
 which is why conversion at step 2 does not distort it. That is worth a test (T2 below) because it
 is the whole feature.
 
+```mermaid
+sequenceDiagram
+    participant Cu as Customer (billed in INR)
+    participant W as WalletService
+    participant Inv as InvoiceService
+    participant Pay as Payment processing
+    Cu->>W: top up 300 USD credits
+    W->>W: H1: ResolveRate(usd → inr) must succeed
+    W->>W: pending credit tx: 300 USD, wallet currency
+    W->>Inv: one-off invoice, currency usd, total 300.00
+    Inv->>Inv: Phase 1 conversion at finalize (or checkout session)<br/>currency inr, total 30,000.00, fx_conversion { rate 100 }
+    Cu->>Pay: pays ₹30,000 (card, payment link, INR postpaid wallet)
+    Pay->>W: CompletePurchasedCreditTransaction(tx)
+    W->>W: wallet += tx.Amount = 300 USD (never the invoice total)
+    W->>W: P3: copy invoice.fx_conversion onto the credit block
+```
+
 ### 3.2 The changes
 
 | # | Change | Where |
@@ -215,6 +232,21 @@ RefundCredits(wallet, credits):
   → one refund row per block
 ```
 
+```mermaid
+flowchart TD
+    A["POST /wallets/:id/refund { credits: N }"] --> G{"granted blocks needed, and the billing<br/>currency differs from the wallet's?"}
+    G -- yes --> RR{"ResolveRate(wallet.currency → billing) now?"}
+    RR -- miss --> REJ["Rejected before any block is debited (H3)"]
+    RR -- hit --> ALLOC
+    G -- no --> ALLOC["Allocate N across blocks with credits_available:<br/>purchased newest-first, then granted newest-first;<br/>debit each block in the wallet currency"]
+    ALLOC --> P["Purchased, stamped block:<br/>value × stamped rate, in the stamp's billing currency"]
+    P --> PGW["row → GATEWAY against that block's top-up payment"]
+    ALLOC --> GR["Granted block: value × rate resolved now,<br/>in the current billing currency"]
+    GR --> CAP{"a top-up payment of this wallet<br/>with refund capacity left?"}
+    CAP -- yes --> GW["row → GATEWAY against that payment"]
+    CAP -- no --> OOB["row → OUT_OF_BAND, payment_id null<br/>settled by POST /refunds/:id/settle"]
+```
+
 Purchased blocks go first because they are the ones with cash behind them, which decides where the
 money can come from:
 
@@ -251,6 +283,15 @@ settleToWallet(row) on an invoice with fx_conversion:
   TopUpWallet(wallet, credits, reason credit_note, reference row)
   row.currency stays the invoice currency; row.settled_amount = row.amount;
   refund_destination_id = the wallet transaction, whose metadata records { rate, rate_id, billing_amount }
+```
+
+```mermaid
+flowchart LR
+    CN["Refund credit note, target PREPAID_WALLET<br/>converted invoice, amount ₹8,300"] --> R{"ResolveRate(usd → inr) now?"}
+    R -- miss --> X["Rejected unless target is BACK_TO_SOURCE"]
+    R -- "hit: 83" --> D["credits = 8,300 ÷ 83 = 100.00 USD"]
+    D --> W["EnsurePrepaidWallet(customer, usd)"] --> T["TopUpWallet 100 USD, reason CREDIT_NOTE<br/>metadata: rate, rate_id, billing_amount"]
+    T --> S["refund row: currency inr, settled_amount 8,300,<br/>refund_destination_id = the wallet transaction"]
 ```
 
 While rates are fixed the resolved rate equals the invoice's frozen one, so the customer gets back
@@ -317,6 +358,19 @@ POST /v1/wallets/:id/migrate   { "target_wallet_type": "POST_PAID", "target_curr
    metadata { source_wallet_id, rate, rate_id })
 4. purchased blocks' stamps are not carried: after migration the balance is a postpaid balance in
    the billing currency and refunds from it need no rate
+```
+
+```mermaid
+flowchart TD
+    A["POST /wallets/:id/migrate<br/>{ target_wallet_type: POST_PAID, target_currency }"] --> V{"source PRE_PAID and active?<br/>target_currency = billing currency (G23)?<br/>no active POST_PAID wallet in it?"}
+    V -- no --> R["400"]
+    V -- yes --> S{"same currency?"}
+    S -- yes --> M1["target_amount = balance, 1:1"]
+    S -- no --> RR{"ResolveRate(source → target)<br/>at customer scope?"}
+    RR -- miss --> R2["400 naming the pair; nothing changed"]
+    RR -- hit --> M2["target_amount = round(balance × rate, target)"]
+    M1 --> TX
+    M2 --> TX["One transaction:<br/>debit source to 0 (WALLET_MIGRATION), close source,<br/>create target, credit target_amount with rate metadata"]
 ```
 
 This is the only place in either phase where a wallet balance meets a rate, and it is an explicit,

@@ -444,6 +444,21 @@ ResolveRate(ctx, from, to, subscriptionID, customerID) → (rate, rateID, scope)
        Mark(ierr.ErrNotFound)
 ```
 
+```mermaid
+flowchart TD
+    A["ResolveRate(from, to, subscription_id, customer_id)"] --> I{"from == to?"}
+    I -- yes --> ID["rate 1, identity<br/>no query, no snapshot"]
+    I -- no --> S{"subscription_id given?"}
+    S -- yes --> SQ["fx_rates: scope = subscription, scope_id = subscription_id<br/>pair, status published"]
+    S -- "no (one-off)" --> CQ
+    SQ -- hit --> WIN["return rate, rate_id, scope"]
+    SQ -- miss --> CQ["fx_rates: scope = customer, scope_id = customer_id<br/>pair, status published"]
+    CQ -- hit --> WIN
+    CQ -- miss --> EQ["fx_rates: scope = environment, scope_id = environment_id<br/>pair, status published"]
+    EQ -- hit --> WIN
+    EQ -- miss --> NF["ErrNotFound naming the pair and every scope tried<br/>never 1, never the inverse of the other direction"]
+```
+
 Three point lookups at worst, each fully covered by the live-key index. Determinism needs no
 tie-break: the partial unique index makes "the live row for this key" a single row.
 
@@ -463,6 +478,38 @@ one function.
 ---
 
 ## 4. Invoice lifecycle
+
+The whole lifecycle in one picture. Everything left of the decision is today's code on
+charge-currency amounts; everything right of the conversion is today's code on a billing-currency
+invoice. The new work is the decision, the resolver and `ConvertInvoice`.
+
+```mermaid
+flowchart LR
+    subgraph CC["Charge currency — existing code, untouched"]
+        direction TB
+        D["Draft created<br/>currency = subscription / wallet / request currency"] --> C["Compute, recompute, coupons,<br/>manual edits, previews"]
+        C --> PC["Prepaid credits applied in the charge currency<br/>(finalize for subscription invoices, compute for one-off)"]
+    end
+    PC --> Q{"customer.billing_currency set<br/>and different from inv.currency?"}
+    CK["Checkout (pay-first) draft"] -. "same decision at session creation;<br/>finalize reuses fx_conversion (F8)" .-> Q
+    Q -- "no (F1, F2)" --> FIN["Finalize exactly as today<br/>no rate, no snapshot"]
+    Q -- yes --> R{"ResolveRate<br/>subscription → customer → environment"}
+    R -- "miss (F3)" --> STAY["Stays DRAFT<br/>error names the pair; non-retryable in Temporal;<br/>picked up once a rate exists"]
+    R -- hit --> CONV["ConvertInvoice, once<br/>currency = billing; amounts and lines rewritten;<br/>fx_conversion written"]
+    CONV --> TAX["Tax recomputed in the billing currency"]
+    TAX --> FIN2["FINALIZED — an ordinary billing-currency invoice"]
+    subgraph BC["Billing currency — existing consumers, untouched"]
+        direction TB
+        PAY["Card / gateway payment, POST_PAID wallet"]
+        CN["Credit notes, refunds, void (G25 for the prepaid portion)"]
+        ERP["Zoho / QuickBooks with the frozen rate"]
+        PDF["PDF, portal, webhooks, API"]
+    end
+    FIN2 --> PAY
+    FIN2 --> CN
+    FIN2 --> ERP
+    FIN2 --> PDF
+```
 
 ### 4.1 Draft — unchanged
 
@@ -639,6 +686,22 @@ of the refund design hold in INR unchanged. **Nothing new is stored on `credit_n
 | Gateway failure → wallet fallback | Phase 1: billing-currency wallet row, as today. Phase 2: rerouted through the same division | Phase 2 §4.3 | 1 / 2 |
 | Void | Paid portion INR to an INR wallet; prepaid portion in the charge currency from `fx_conversion.source` (G25) | none — snapshot | 1 |
 
+```mermaid
+flowchart TD
+    CN["Credit note on a converted invoice<br/>document currency = billing (INR)"] --> T{"credit_note_type"}
+    T -- ADJUSTMENT --> ADJ["amount_due reduced in INR<br/>no rate — Phase 1, unchanged"]
+    T -- REFUND --> RT{"refund_target"}
+    RT -- BACK_TO_SOURCE --> GW["INR rows against INR payments<br/>gateway returns INR — no rate — Phase 1, unchanged"]
+    RT -- PREPAID_WALLET --> PH{"phase"}
+    PH -- "1" --> REJ["Rejected (G30): use BACK_TO_SOURCE"]
+    PH -- "2" --> DIV["amount ÷ rate resolved now for the invoice's pair<br/>→ charge-currency wallet (Phase 2 §4.2)"]
+    GW -- "gateway refund fails" --> FB{"phase"}
+    FB -- "1" --> FB1["Billing-currency wallet row, as today"]
+    FB -- "2" --> DIV
+    VOID["Void of a converted invoice"] --> V1["Paid portion: INR to an INR prepaid wallet"]
+    VOID --> V2["Prepaid portion: charge currency from fx_conversion.source<br/>(G25) — never divided by the rate"]
+```
+
 **A clarification of the PRD.** The PRD says a back-to-source refund uses *"the rate resolved at
 refund time"*. Under this design a back-to-source refund involves no rate at all: the invoice, its
 payments and the credit note are all in the billing currency, and a gateway returns what it
@@ -687,6 +750,22 @@ for a missing rate) with a hint naming the currency pair and, where relevant, th
 | G9 | Clearing `billing_currency` (set to null) is allowed: invoices fall back to the charge currency, which is always resolvable | — |
 | G10 | The change applies to invoices that **convert after it**. Finalized invoices are never restated; drafts convert at their own finalize with the value current then | Structural — nothing reads `billing_currency` except step 4 |
 
+```mermaid
+flowchart TD
+    A["PUT /customers/:id { billing_currency: X }"] --> V{"valid code, and a fiat currency<br/>under custom_currency_config? (G6)"}
+    V -- no --> R1["400"]
+    V -- yes --> N{"X is null (clear)?"}
+    N -- yes --> OK["Save. Invoices follow the charge currency (G9)"]
+    N -- no --> SUBS["Every active / trialing / paused subscription where this customer<br/>is the subscriber or the invoicing customer, and sub.currency != X"]
+    SUBS --> RR{"ResolveRate(sub.currency → X)<br/>succeeds for every one?"}
+    RR -- "any missing" --> R2["400 listing every missing pair (G7)"]
+    RR -- all --> DR{"open drafts with currency != X<br/>resolve too?"}
+    DR -- no --> R2
+    DR -- yes --> PW{"POST_PAID wallet with balance > 0<br/>in a currency != X? (G8)"}
+    PW -- yes --> R3["400 naming the wallet — drain or close it first"]
+    PW -- no --> OK2["Save. Applies to invoices that convert after this;<br/>finalized invoices untouched (G10)"]
+```
+
 ### 5.3 Subscriptions
 
 | # | Rule | Enforced in |
@@ -695,6 +774,21 @@ for a missing rate) with a hint naming the currency pair and, where relevant, th
 | G12 | Checkout-gated create runs G11 **before** the session is opened, so a customer is never shown a price that cannot be invoiced | `CheckoutSessionService` |
 | G13 | A subscription's charge currency is immutable ([subscription.go:57-62](../../ent/schema/subscription.go#L57)); plan change v2 requires the target plan in the same currency. The v1 change path, which creates a new subscription, goes through G11 | Existing |
 | G14 | Plan change, addon attach and quantity change on a cross-currency subscription need no new check: the settlement invoice is a draft in the charge currency and converts at finalize under F3. G4 guarantees the rate is still there | Structural |
+
+```mermaid
+flowchart TD
+    A["POST /subscriptions { currency: C, fx_rate? }"] --> IC["invoicing customer =<br/>invoicing_customer_id, else customer_id"]
+    IC --> B{"billing_currency set<br/>and different from C?"}
+    B -- no --> FX{"fx_rate in the request?"}
+    FX -- yes --> RJ0["400: nothing for the rate to do"]
+    FX -- no --> CREATE["Create as today — no FX code runs"]
+    B -- yes --> INL{"fx_rate in the request?"}
+    INL -- yes --> ROW["Create the subscription-scoped fx_rates row<br/>in the same transaction (G1 applies)"] --> CREATE2["Create subscription"]
+    INL -- no --> RES{"ResolveRate(C → billing)<br/>at customer or environment scope?"}
+    RES -- hit --> CREATE2
+    RES -- miss --> RJ["400: No exchange rate configured for C → billing.<br/>Set a rate before subscribing this customer (G11)"]
+    CK["Checkout-gated create"] -. "runs this before the session opens (G12)" .-> IC
+```
 
 ### 5.4 Invoices
 
@@ -884,6 +978,22 @@ wildcards so no `roles.json` change. Handlers annotate `@x-scope "read"` on `sea
 ---
 
 ## 7. Integration egress
+
+```mermaid
+flowchart TD
+    E["invoice.update.finalized"] --> FXQ{"fx_conversion present?"}
+    FXQ -- no --> LEG["Existing path: provider's own rate,<br/>existing customer mapping — as on feat/fx-rates"]
+    FXQ -- yes --> RATE["exchange_rate = fx_conversion.rate (§7.1)"]
+    RATE --> MAP{"mapping (customer, provider,<br/>currency = invoice.currency)?"}
+    MAP -- yes --> POST["Post the invoice in its own currency<br/>with the frozen rate"]
+    MAP -- no --> LEGM{"legacy mapping with currency = ''?"}
+    LEGM -- "yes, and the provider contact's currency<br/>equals the invoice's" --> STAMP["Stamp currency on the row"] --> POST
+    LEGM -- "yes but differs / none" --> NEW["Create a provider customer in invoice.currency<br/>+ mapping row (§7.2)"] --> POST
+    NEW -- "creation fails" --> FAIL["Sync fails naming the currency (G31); invoice untouched"]
+    STR["Stripe outbound invoice sync"] --> STQ{"fx_conversion present and the Stripe<br/>customer locked to another currency?"}
+    STQ -- yes --> SF["Fails naming the currency (§7.3)"]
+    STQ -- no --> SOK["As today"]
+```
 
 ### 7.1 Send our rate
 
