@@ -774,11 +774,19 @@ nothing for the rate to do).
 finalize. It is present only on drafts of customers whose billing currency differs from the
 draft's currency.
 
-**PDF and portal.** A converted invoice shows, on the subtotal line and on each line, the source
-amount and the rate — *"₹8,300.00 (converted from $100.00 at 83.00)"* — read from `fx_conversion`.
-There is no second source of truth for the source amount. The top-up case in Phase 2 is why this is
-a requirement: an INR invoice with no `$300.00 of credits` on it does not tell the customer what
-they bought.
+**Where the frozen rate is visible.** Every surface reads the same `fx_conversion` column; there
+is no second source of truth for the rate or the source amounts.
+
+| Surface | Shows | How it gets there |
+| --- | --- | --- |
+| `GET /v1/invoices/:id`, list, search | `fx_conversion` on the invoice and on each line (above) | `InvoiceResponse` and `InvoiceLineItemResponse` gain the field, mapped from the column |
+| Invoice webhooks — `invoice.update.finalized`, `invoice.update.payment`, `invoice.update.voided`, `invoice.update` | the same block | `InvoicePayloadBuilder.BuildPayload` calls `GetInvoice` and wraps the response ([payload/invoice.go:27-72](../../internal/webhook/payload/invoice.go#L27)), so the DTO field flows through with no builder change |
+| Invoice PDF | on the subtotal and on each line, the source amount and the rate — *"₹8,300.00 (converted from $100.00 at 83.00)"* — and a note naming the pair and rate | `pdf.InvoiceData` ([domain/pdf/model.go:11](../../internal/domain/pdf/model.go#L11)) gains `ChargeCurrency`, `FXRate`, `SourceSubtotal`, `SourceNet`; the line struct gains `SourceAmount`; both filled from `fx_conversion` where the builder already maps the totals ([invoice.go:3147-3186](../../internal/ee/service/invoice.go#L3147)); the template renders them only when `FXRate` is set |
+| Customer portal | as the PDF | reads the API |
+| Zoho, QuickBooks | `exchange_rate` / `ExchangeRate` = `fx_conversion.rate`, alongside the invoice in its own currency | §7.1 |
+
+The top-up case in Phase 2 is why the PDF line is a requirement and not a nicety: an INR invoice
+with no *"$300.00 of credits"* on it does not tell the customer what they bought.
 
 The invoice list filter `currency` filters on the stored (billing) currency. A new filter
 `charge_currency` reads `fx_conversion->>'charge_currency'`.
