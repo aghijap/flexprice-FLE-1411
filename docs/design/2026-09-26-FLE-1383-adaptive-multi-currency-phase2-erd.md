@@ -21,7 +21,7 @@ credits held in another:
 | Downgrade / cancellation / grant credits land in the charge-currency wallet | ✅ unchanged behaviour | unchanged |
 | Purchased top-up of a USD wallet by an INR-billed customer | ❌ G24 | ✅ §3 |
 | Rate stamped on the purchased credit block | | ✅ §2 |
-| Refund of unused purchased credits at the stamped rate | | ✅ §4.1 |
+| Refund of unused credits — purchased at the stamped rate, granted at the rate resolved at refund time | | ✅ §4.1 |
 | Refund credit note → wallet on a converted invoice | ❌ G30 | ✅ §4.2 |
 | Gateway-failure refund fallback lands in the charge-currency wallet | billing-currency wallet | ✅ §4.3 |
 | Balance shown in the billing currency | | ✅ §5 |
@@ -109,8 +109,8 @@ type FXTopupConversion struct {
 
 Written once, by the code that completes a purchased-credit transaction after its invoice is paid,
 by copying the invoice's `fx_conversion`. It is NULL on every block that was not bought across a
-rate — granted credits, proration credits, same-currency purchases — and those blocks are refunded
-at the wallet's own `conversion_rate` exactly as today. `wallet_transactions` is already the credit
+rate — granted credits, proration credits, same-currency purchases. A refund of such a block has
+no bought-at rate to honour, so it converts at the rate that resolves at refund time (§4.1). `wallet_transactions` is already the credit
 block: `credits_available`, `expiry_date` and `priority` live there, and the expiry-aware debit
 walks blocks ([`docs/prds/debit-wallet.md`](../prds/debit-wallet.md)); the stamp joins them.
 
@@ -173,40 +173,63 @@ the pre-tax net — the value of the credits — not the tax-inclusive total.
 
 ## 4. Refunds
 
-### 4.1 Unused purchased credits at the stamped rate
+### 4.1 Unused credits — purchased at the stamped rate, granted at today's rate
 
-PRD: *"Refunds of unused credits use the rate the credits were bought at."* The stamp makes this a
-lookup, not a policy:
-
-```
-RefundUnusedCredits(wallet, credits):
-  blocks := purchased credit blocks with credits_available > 0, newest first
-  for each block until `credits` is allocated:
-      take := min(block.credits_available, remaining)
-      debit take from the block (wallet currency)
-      owed += take × block.conversion_rate × (block.fx_conversion.rate  if stamped  else 1)
-  → owed is in the billing currency for stamped blocks, in the wallet currency otherwise
-```
-
-Only **purchased** blocks are refundable (`transaction_reason = PURCHASED_CREDIT_INVOICED`);
-granted, proration and credit-note blocks are consumed first by the existing expiry-aware debit and
-are never refunded for cash. Newest-first allocation on refund is the mirror of soonest-expiry-first
-on debit and means a customer who bought twice at different rates is refunded the most recent
-purchase at its own rate.
-
-Where the money goes is the refund ledger's job ([refund-architecture-erd](2026-08-28-refund-architecture-erd.md)):
-a `refund` row per block, `payment_id` = the top-up invoice's payment, `currency` = the block's
-billing currency, `amount` = that block's share of `owed`, dispatched to the gateway or, on failure,
-back to the wallet as a fallback row. A block whose top-up payment was in another currency than the
-customer's *current* billing currency refunds in the currency it was paid in — the stamp carries
-`billing_currency` for exactly this case.
-
-This is the one part of Phase 2 without an existing operation to attach to: there is no
-"refund unused credits" endpoint today — `POST /v1/wallets/:id/terminate` debits the remaining
+Nothing refunds wallet credits to cash today. `POST /v1/wallets/:id/terminate` debits the remaining
 balance as `WALLET_TERMINATION` and closes the wallet without returning money
-([wallet.go:1845](../../internal/ee/service/wallet.go#L1845)). It ships as `POST /v1/wallets/:id/refund` with
-`{ "credits": "200" }` (or `"all": true`), and can trail the rest of Phase 2 if needed — the stamp
-must land first, the endpoint can follow.
+([wallet.go:1845](../../internal/ee/service/wallet.go#L1845)); `POST /v1/wallets/:id/debit` is a
+manual balance debit with no money movement; the refund ledger only refunds invoice payments; and
+`OUT_OF_BAND` is an enum value nothing produces ([refund-architecture-erd §8.3](2026-08-28-refund-architecture-erd.md)).
+So this endpoint is new for purchased and granted credits alike.
+
+**Decision (2026-09-26): granted credits are cash-refundable, at the rate resolved at refund time.**
+PRD: *"Refunds of unused credits use the rate the credits were bought at"* — which only a purchased
+block has. Two rate sources, one rule each:
+
+| Block | Rate | Why |
+| --- | --- | --- |
+| Purchased (`PURCHASED_CREDIT_INVOICED`, stamped) | `fx_conversion.rate` on the block | The customer paid a known amount; they get that back |
+| Purchased, unstamped (same-currency top-up) | none — refund in the wallet currency | Nothing was converted |
+| Granted, proration, credit-note, bonus | `ResolveRate(wallet.currency → billing_currency)` **now**, customer / environment scope | Nobody paid for them, so there is no bought-at rate; the commercial rate today is the value the tenant is choosing to give back |
+
+```
+RefundCredits(wallet, credits):
+  blocks := credit blocks with credits_available > 0,
+            purchased first (newest first), then granted (newest first)
+  for each block until `credits` is allocated:
+      take    := min(block.credits_available, remaining)
+      debit take from the block (wallet currency; reason WALLET_REFUND)
+      value   := take × wallet.conversion_rate                        -- wallet currency
+      owed    += purchased & stamped : value × block.fx_conversion.rate   in block.fx_conversion.billing_currency
+                 otherwise          : value × rate_now                    in customer.billing_currency
+                                       (rate_now = 1 when no billing currency or it equals the wallet's;
+                                        no rate resolvable → the whole refund is rejected naming the pair,
+                                        before any block is debited)
+  → one refund row per block
+```
+
+Purchased blocks go first because they are the ones with cash behind them, which decides where the
+money can come from:
+
+| Row for | `payment_id` | Destination | Settles |
+| --- | --- | --- | --- |
+| Purchased block | the top-up invoice's payment | `GATEWAY` | as any refund row: adapter, webhook, fallback on failure |
+| Granted block, while the wallet's top-up payments still have refund capacity | that payment | `GATEWAY` | the gateway does not care what a charge "was for"; this is the practical cash path |
+| Granted block beyond any payment's capacity | `NULL` | **`OUT_OF_BAND`** | an operator moves the money and records it: `POST /v1/refunds/:id/settle { "reference": "…" }` — the first producer of `OUT_OF_BAND` rows and the settle endpoint the refund ERD deferred |
+
+That is the refund ledger's existing shape — allocate across payments bounded by capacity, then a
+single row for whatever no payment can cover — with the remainder going out of band instead of back
+into a wallet, which for a wallet refund would be circular. A failed gateway row on a converted
+wallet still falls back to the wallet as today; it is the customer's money and the fallback keeps
+it on the books.
+
+A purchased block whose top-up was paid in a currency other than the customer's *current* billing
+currency refunds in the currency it was paid in — the stamp carries `billing_currency` for exactly
+this case. Granted blocks refund in the current billing currency.
+
+Ships as `POST /v1/wallets/:id/refund` with `{ "credits": "200" }` (or `"all": true`); the
+response lists the refund rows with their block, rate and destination. The stamp must land first
+(§10 step 1); the endpoint can trail.
 
 ### 4.2 Refund credit note → wallet on a converted invoice
 
@@ -300,7 +323,7 @@ operator-triggered, audited move between two wallets — not an in-place edit.
 | --- | --- |
 | H1 | A top-up whose invoice would convert requires a resolvable rate at request time (P2). No pending transaction is written otherwise |
 | H2 | The stamp is written once, on completion, from the invoice's snapshot; it is never re-derived or edited. A block without a stamp is refunded at the wallet's `conversion_rate` alone |
-| H3 | Purchased blocks only are cash-refundable; newest first |
+| H3 | Every block with `credits_available > 0` is cash-refundable: purchased first at the stamped rate, then granted at the rate resolved now. A granted-credit refund with no resolvable rate is rejected before any block is debited. Rows beyond payment capacity are `OUT_OF_BAND` and settle only through the settle endpoint |
 | H4 | Credit-note refund to a wallet on a converted invoice uses the invoice's pair, resolved at refund time, dividing by the forward rate; no rate → rejected unless `BACK_TO_SOURCE` |
 | H5 | The fallback wallet row for a converted invoice goes to the charge-currency wallet via H4 |
 | H6 | Migration targets the billing currency only; one active postpaid wallet per currency; rate required when currencies differ; the source is closed, never left half-drained |
@@ -321,7 +344,8 @@ DELETE  guard G24                          top-up purchase on a non-billing-curr
 POST    /v1/wallets/:id/top-up             response gains invoice.fx_conversion + converted total
 GET     /v1/wallets/:id/transactions       rows gain fx_conversion
 GET     /v1/wallets/:id/balance/real-time  gains billing_currency_estimate
-POST    /v1/wallets/:id/refund             NEW — refund unused purchased credits (§4.1)
+POST    /v1/wallets/:id/refund             NEW — refund unused credits, purchased and granted (§4.1)
+POST    /v1/refunds/:id/settle             NEW — record an OUT_OF_BAND row as settled (§4.1)
 POST    /v1/wallets/:id/migrate            NEW — prepaid → postpaid (§6)
 POST    /v1/credit-notes … refund_target   PREPAID_WALLET accepted on converted invoices (§4.2)
 ```
@@ -342,7 +366,10 @@ Webhooks: `wallet.transaction.created` payloads carry `fx_conversion`; `refund.c
 | T5 | $330 usage against the $300 wallet, cycle close | $300 debited at finalize (Phase 1 step 3); $30 converts to ₹3,000; total paid ₹33,000 (PRD worked example) |
 | T6 | Refund 200 of the 300 credits | ₹20,000 refund row against the top-up payment; wallet −$200 (PRD worked example) |
 | T7 | Two purchases at rates 100 and 110, refund spans both | newest block at 110, remainder at 100; two refund rows |
-| T8 | Granted block only, refund requested | nothing refundable |
+| T8 | Granted block only, current rate 83, top-up payment with capacity | ₹ value at 83 as a `GATEWAY` row against that payment |
+| T8b | Granted block only, no top-up payment | one `OUT_OF_BAND` row, `payment_id = NULL`, pending until settled |
+| T8c | Granted block, no resolvable rate | rejected before any debit |
+| T8d | Purchased and granted blocks, refund spans both | purchased first at the stamp, granted at today's rate; two rows |
 | T9 | Refund CN to wallet on a ₹8,300 invoice frozen at 83, current rate 83 | $100 credited |
 | T10 | Same, current rate superseded to 85 | ₹8,300 ÷ 85 credited; metadata records 85 |
 | T11 | Same, no rate | rejected unless `BACK_TO_SOURCE` |
@@ -375,8 +402,13 @@ gateway charge are in different currencies. Document the top-up invoice's source
    against a months-old payment?** Razorpay and Chargebee adapters exist; Stripe and Moyasar do
    not (refund ERD §8.7), so a refund on those falls back to the wallet, which for an unused-credit
    refund is circular. The endpoint may need to be gateway-gated at launch.
-2. **Should granted credits ever be cash-refundable?** No, per this design. Confirm with the
-   Phase 2 launch customer; it is a one-line change to H3 if a contract says otherwise.
+2. **Refunding granted credits against a purchase payment.** Decided: granted credits are
+   refundable at today's rate. The open part is accounting, not product: a `GATEWAY` row for a
+   granted block partially refunds a top-up payment whose purchased credits may have been fully
+   consumed, so the books read "refunded ₹4,150 of top-up invoice X". If finance wants granted
+   refunds kept off purchase payments, the middle row of the §4.1 destination table is dropped and
+   every granted refund is `OUT_OF_BAND`. One flag on the endpoint (`funding: topup_payments |
+   out_of_band`) covers both; default to be confirmed with the launch customer's finance contact.
 3. **Estimate rate scope.** The balance estimate resolves at customer / environment scope because a
    wallet is not tied to one subscription. A customer with subscription-scoped rates only sees an
    estimate at the customer or environment rate, which may differ from what their invoice will use.

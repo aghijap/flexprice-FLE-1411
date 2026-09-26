@@ -60,7 +60,7 @@ wallet**:
 | Plan / addon credit grants | Charge currency. Existing | **1** — unchanged behaviour |
 | **Purchased top-up** of a charge-currency wallet by a customer billed in another currency | Customer pays INR, wallet receives USD. The rate must be stamped on the credit block and honoured at refund | **2** |
 | **Refund credit note → wallet** on a converted invoice | INR document, USD wallet: divide at the rate resolved at refund time | **2** |
-| Refund of unused purchased credits | Uses the stamped block rate | **2** |
+| Refund of unused credits (purchased or granted) to cash | Purchased at the stamped block rate; granted at the rate resolved at refund time. No cash refund of wallet credits exists today | **2** |
 | Balance shown in the billing currency | Display only | **2** |
 | Prepaid → postpaid migration with conversion | New operation | **2** |
 
