@@ -93,6 +93,40 @@ Live market rates; inverse-rate derivation; a payment in a currency other than t
 restating a finalized invoice; changing a subscription's charge currency; a tax reference rate
 separate from the commercial rate (PRD open question — §11).
 
+### 1.4 Inertness audit
+
+Every code path this design touches, the condition under which its new behaviour fires, and what
+a customer with `billing_currency = NULL` sees. The rule for the implementation: **no row below may
+fire on NULL**, and a test asserts each one (T15, T45–T48).
+
+| Path | New behaviour fires when | With `billing_currency = NULL` |
+| --- | --- | --- |
+| `performFinalizeInvoiceActions` step 4 | customer has a billing currency ≠ `inv.Currency` | one cached customer read, then the existing path. No `fx_rates` query |
+| `RecalculateTaxesOnInvoice` widening (G21) | `fx_conversion != nil` | unchanged: subscription invoices only |
+| `CreateComputedDraftInvoice` (checkout) | as step 4 | unchanged |
+| `CreateInvoice` one-off (G17, G22) | billing currency set and ≠ `req.Currency` | unchanged |
+| `validateInvoicePaymentEligibility` (G17) | draft, unconverted, billing currency ≠ draft currency | unchanged |
+| `createSubscription` (G11), checkout create (G12) | invoicing customer has a billing currency ≠ `req.Currency` | unchanged; `fx_rate` on the request is rejected as meaningless |
+| `CustomerService.Create/Update` (G6–G9) | `billing_currency` present in the request | unchanged |
+| `CreateWallet` (G23) | `POST_PAID` and billing currency set | unchanged |
+| `TopUpWallet` purchase, auto top-up (G24) | `PRE_PAID`, billing currency set and ≠ wallet currency | unchanged |
+| Void (G25) | `fx_conversion != nil` | unchanged: one amount in `inv.Currency` |
+| `FinalizeCreditNote` wallet target (G30) | `fx_conversion != nil` | unchanged |
+| Grouped-invoice merge (G20) | invoicing customer has a billing currency | unchanged |
+| Zoho / QuickBooks rate (§7.1) | `fx_conversion != nil` | provider rate, as on `feat/fx-rates` |
+| Per-currency ERP customer (§7.2) | `fx_conversion != nil` | existing mapping used as today |
+| Stripe outbound invoice sync (§7.3) | `fx_conversion != nil` | unchanged |
+| Invoice / subscription / customer responses | always (new nullable fields) | `fx_conversion: null`, `billing: null`, `billing_currency: null` — additive |
+| `billing_currency_estimate` on drafts and previews | billing currency set and ≠ draft currency | absent |
+| Repositories | always (new columns written set-or-keep) | NULL round-trips; `Update` never clears |
+| `fx_rates` endpoints, RBAC entity, webhooks | only when called | nothing calls them |
+| Migration | — | four nullable / defaulted additions and one index swap; no backfill; no row rewritten |
+
+Two things that are **not** inert and are deliberately kept out of this change: the case-sensitive
+currency compare at [payment_processor.go:739](../../internal/ee/service/payment_processor.go#L739)
+(left as is; a separate cleanup), and whether mixed-currency grouped-invoicing children can exist
+today (G20 does not change how such groups bill; it only refuses to convert them).
+
 ---
 
 ## 2. Data model
@@ -464,11 +498,14 @@ tax:
     credits (wallet debit), Total = Subtotal − Discount − Credits,
     capture + project custom currency
 ── NEW ──────────────────────────────────────────────────────────────────────────
-4.  billing := customer(inv.CustomerID).BillingCurrency
+4.  billing := CustomerRepo.Get(inv.CustomerID).BillingCurrency      -- Redis-cached read, invalidated on update;
+                                                                       -- not found → "" and an Info log (F12)
     if billing == "" || IsMatchingCurrency(billing, inv.Currency)  → skip to 7   (F1, F2)
     if inv.FXConversion != nil                                     → skip to 7   (F8: already converted, e.g. checkout draft)
 5.  rate := ResolveRate(inv.Currency → billing, inv.SubscriptionID, inv.CustomerID)
-    err → return it. Nothing written; invoice stays DRAFT.                       (F3)
+    err → wrap as ierr.ErrInvalidOperation and return it. Nothing written;
+          invoice stays DRAFT.                                                   (F3, G15)
+    assert inv.AmountPaid.IsZero()                                               (G17)
 6.  ConvertInvoice(inv, lines, rate)                                             (§4.3)
     → inv.Currency = billing; every amount column and every line rewritten;
       fx_conversion written on the invoice and each line
@@ -663,13 +700,13 @@ for a missing rate) with a hint naming the currency pair and, where relevant, th
 
 | # | Rule | Enforced in |
 | --- | --- | --- |
-| G15 | **Terminal check.** No resolvable rate at finalize → finalize refused, invoice stays `DRAFT`, error names the pair and scopes tried, nothing partially written. Never a rate of 1, never a guess. Logged at `Error` with `invoice_id`, `from`, `to`. The scheduled finalizer picks the draft up again once a rate exists | Step 5 |
+| G15 | **Terminal check.** No resolvable rate at finalize → finalize refused, invoice stays `DRAFT`, error names the pair and scopes tried, nothing partially written. Never a rate of 1, never a guess. Logged at `Error` with `invoice_id`, `from`, `to`. The error is marked `ErrInvalidOperation` so `FinalizeInvoiceActivity`'s existing branch ([invoice_activities.go:163-169](../../internal/temporal/activities/invoice/invoice_activities.go#L163)) returns it **non-retryable**: the workflow surfaces it instead of retrying a configuration gap, and the scheduled finalizer (`IsFinalizationDue`) picks the draft up once a rate exists | Step 5 |
 | G16 | **Exactly once.** `fx_conversion IS NOT NULL` skips conversion. The write is in the same transaction as the amounts, under the row lock. A retried finalize activity cannot double-convert | Step 4 |
-| G17 | A draft that will convert must have `amount_paid = 0`. `CreateInvoiceRequest` with `amount_paid > 0` (or a pre-set paid status) for a customer whose billing currency differs from `req.Currency` is rejected at creation: a charge-currency payment cannot be carried across the rate | `CreateInvoice` |
+| G17 | A draft that will convert must have `amount_paid = 0` when conversion runs. Two entry points can break that and both are closed: `CreateInvoiceRequest` with `amount_paid > 0` (or a pre-set paid status) for a customer whose billing currency differs from `req.Currency` is rejected at creation; and a **payment recorded against a draft** — allowed today, `validateInvoicePaymentEligibility` checks only paid / voided / currency ([payment.go:228-260](../../internal/ee/service/payment.go#L228)) — is rejected when the draft is unconverted and the customer's billing currency differs from it: *"Finalize the invoice first; it will be issued in INR."* Checkout drafts are already converted and take payment normally. A charge-currency payment cannot be carried across the rate | `CreateInvoice`; `validateInvoicePaymentEligibility` |
 | G18 | A converted draft (checkout) is frozen: `RecalculateInvoiceV2`, manual line edits and `ComputeInvoice` reject it. Voiding it is allowed | Those entry points, on `fx_conversion != nil` |
-| G19 | Conversion invariants: `Σ line_net_b == net_b`; `subtotal_b − total_discount_b − credits_b == net_b`; a non-zero `net_c` never converts to zero (F6). Asserted, not assumed | `ConvertInvoice` |
-| G20 | One charge currency per invoice. Grouped / parent-child invoicing merges child invoices into a parent only when their currencies match; a child in another charge currency remains its own invoice and converts on its own | `billing.go` grouped-invoice merge — verify the current currency check when implementing |
-| G21 | Tax is recomputed in the billing currency for every converted invoice, replacing charge-currency `tax_applied` rows | Step 8 |
+| G19 | Conversion invariants: `amount_paid == 0` on entry; `Σ line_net_b == net_b`; `subtotal_b − total_discount_b − credits_b == net_b`; a non-zero `net_c` never converts to zero (F6); an all-zero invoice (trial start) converts to all zeros without error. Asserted, not assumed | `ConvertInvoice` |
+| G20 | One charge currency per invoice. The grouped-invoicing merge ([billing.go:1870-1900](../../internal/ee/service/billing.go#L1870)) appends every child's line items to the parent request with **no currency check**. When the invoicing customer has a billing currency, a child whose `currency` differs from the parent's is left out of the merged invoice, logged, and bills on its own invoice that converts on its own. Groups of a customer with no billing currency are not touched by this rule (whether mixed-currency children can be created at all is a separate question, outside this change) | grouped-invoice merge, gated on the invoicing customer's `billing_currency` |
+| G21 | Tax is recomputed in the billing currency for every converted invoice, replacing charge-currency `tax_applied` rows. Associations are looked up by entity, not by currency ([`PrepareTaxRatesForInvoice`, tax.go:972](../../internal/ee/service/tax.go#L972)), so the same subscription / customer associations apply and, being percentages, need no conversion; the currency passed in only decides the inclusive / exclusive default for an unstamped association ([invoice.go:4033-4041](../../internal/ee/service/invoice.go#L4033)) — after conversion that default resolves against the **billing** currency, which is the currency the invoice is issued in. Stated so nobody "fixes" it back to the charge currency | Step 8 |
 | G22 | One-off invoice API: `req.Currency` is a charge currency. A customer with `billing_currency = inr` posted a `usd` invoice receives an INR invoice converted from USD; the request cannot override the billing currency. Because one-off invoices auto-finalize, the rate is required at creation and the failure is immediate | `CreateInvoice` |
 
 ### 5.5 Wallets — Phase 1
@@ -677,7 +714,7 @@ for a missing rate) with a hint naming the currency pair and, where relevant, th
 | # | Rule | Enforced in |
 | --- | --- | --- |
 | G23 | **`POST_PAID` wallet currency must equal the customer's billing currency** when one is set (creation, and G8 on change). A postpaid wallet pays finalized invoices; a finalized invoice is in the billing currency | `CreateWallet` |
-| G24 | **Purchased top-up on a `PRE_PAID` wallet whose currency differs from the billing currency is rejected in Phase 1** — *"Top-ups in a currency other than the billing currency arrive with Phase 2."* Free credits, credit grants, proration credits and refund fallbacks are not purchases and are unaffected. **Lifted in Phase 2** | `TopUpWallet` purchase path ([wallet.go:1158](../../internal/ee/service/wallet.go#L1158)) |
+| G24 | **Purchased top-up on a `PRE_PAID` wallet whose currency differs from the billing currency is rejected in Phase 1** — *"Top-ups in a currency other than the billing currency arrive with Phase 2."* Free credits, credit grants, proration credits and refund fallbacks are not purchases and are unaffected. **Auto top-up** on such a wallet checks the same condition first and **skips** with an Info log — no error, no retry storm inside alert evaluation ([`triggerAutoTopup`, wallet.go:4235](../../internal/ee/service/wallet.go#L4235)); the low-balance alert itself still fires. **Lifted in Phase 2** | `TopUpWallet` purchase path ([wallet.go:1158](../../internal/ee/service/wallet.go#L1158)); `triggerAutoTopup` |
 | G25 | **Void of a converted invoice** returns two things separately: the paid portion (`amount_paid − refunded_amount`) in the **billing** currency to the billing-currency prepaid wallet, as today; and the prepaid portion in the **charge** currency — `fx_conversion.source.total_prepaid_credits_applied`, never `total_prepaid_credits_applied ÷ rate` — to the charge-currency wallet it came from. Today both are one amount in `inv.Currency` ([invoice.go:1444-1452](../../internal/ee/service/invoice.go#L1444)); this is the one downstream branch a converted invoice needs | `voidInvoice` + `PrepareRefundsForVoidedInvoice` gains a currency per row |
 | G26 | Prepaid credit application is unchanged and, for a converted invoice, provably runs before conversion (§4.2 step 3 precedes step 4). No FX-aware wallet code exists in Phase 1 | Structural |
 | G27 | Proration net credits and cancellation credits go to a `PRE_PAID` wallet in `sub.Currency` — the charge currency — with no conversion, as today ([wallet.go:3103](../../internal/ee/service/wallet.go#L3103)) | Existing |
@@ -686,7 +723,7 @@ for a missing rate) with a hint naming the currency pair and, where relevant, th
 
 | # | Rule | Enforced in |
 | --- | --- | --- |
-| G28 | Payment currency equals invoice currency. Unchanged; the third check at [payment_processor.go:739](../../internal/ee/service/payment_processor.go#L739) is case-sensitive where the other two use `IsMatchingCurrency` — normalise it while here | Existing |
+| G28 | Payment currency equals invoice currency. Unchanged. (The third check at [payment_processor.go:739](../../internal/ee/service/payment_processor.go#L739) is case-sensitive where the other two use `IsMatchingCurrency`; noted, **not** changed here — relaxing it is a behaviour change for existing customers and belongs in its own cleanup) | Existing |
 | G29 | Credit notes on a converted invoice are in the billing currency, bounded by billing-currency `amount_paid` / `amount_due`. Unchanged | Existing |
 | G30 | **Refund credit note with `refund_target = PREPAID_WALLET` on a converted invoice is rejected in Phase 1** — use `BACK_TO_SOURCE`. Today it would create an INR prepaid wallet for a customer whose usage is priced in USD, which is money the customer cannot spend. **Phase 2** routes it to the charge-currency wallet at the rate resolved at refund time. The gateway-failure fallback to a wallet stays as it is (a billing-currency wallet row) so a failed refund is never lost; Phase 2 re-routes it too | `FinalizeCreditNote` |
 
@@ -784,6 +821,13 @@ subscription does not exist yet, so a subscription-scoped row cannot be created 
 rejected when the customer has no billing currency or it equals the subscription currency (there is
 nothing for the rate to do).
 
+`billing_currency` is lowercased on write like every other currency field. The subscription
+`billing` block needs a customer read and a rate resolution, so it is returned on
+`GET /v1/subscriptions/:id` only, not on list or search — the same customer-read-per-row cost the
+list endpoints avoid today. When a customer or subscription is deleted, `fx_rates` rows scoped to
+it are archived in the same operation; they are unreachable either way, this just keeps the list
+endpoint honest.
+
 ### 6.3 Invoices
 
 ```jsonc
@@ -810,7 +854,9 @@ nothing for the rate to do).
 
 `billing_currency_estimate` is how the dashboard shows a banner on a draft that will fail to
 finalize. It is present only on drafts of customers whose billing currency differs from the
-draft's currency.
+draft's currency, and on the same condition in `GetPreviewInvoice`
+([invoice.go:2363](../../internal/ee/service/invoice.go#L2363)) and the subscription preview
+responses, which are drafts that are never persisted.
 
 **Where the frozen rate is visible.** Every surface reads the same `fx_conversion` column; there
 is no second source of truth for the rate or the source amounts.
@@ -878,6 +924,24 @@ the counterpart carries the currency (*"Acme Corp (INR)"*) so a bookkeeper can t
 Both `GetOrCreateZohoCustomer` and `GetOrCreateQuickBooksCustomer` already take a `currencyCode`
 on `feat/fx-rates`; the change is in mapping lookup, not in the provider calls.
 
+**This lookup runs only for invoices carrying `fx_conversion`.** An invoice that was never
+converted resolves its ERP customer exactly as today — the existing mapping, whatever its
+currency. The handful of customers who already bill in two fiat currencies without this feature
+keep whatever behaviour they have now; fixing them is a data decision, not a side effect of this
+change.
+
+### 7.3 Stripe outbound invoice sync
+
+`SyncInvoiceToStripe` runs on `invoice.update.finalized`, creates a draft in Stripe against the
+customer's Stripe id and sets the currency from the line items
+([stripe/invoice_sync.go:49-140](../../internal/integration/stripe/invoice_sync.go#L49)). Stripe
+locks a customer to one currency once it has an invoice, so a converted INR invoice for a customer
+whose Stripe invoices are in USD is rejected by Stripe. Phase 1 does not build a per-currency
+Stripe customer: the sync fails naming the currency, exactly as §7.2's last resort does for the
+ERPs, and the invoice is untouched. Tenants using Stripe outbound sync should set billing
+currencies only for customers with no Stripe invoice history, or accept the failure until a
+per-currency Stripe customer is added. Inert for invoices without `fx_conversion`.
+
 ---
 
 ## 8. Failure modes
@@ -895,6 +959,9 @@ on `feat/fx-rates`; the change is in mapping lookup, not in the provider calls.
 | F9 | Void of a converted invoice | Prepaid portion returned in the charge currency from the snapshot; paid portion in the billing currency (G25) |
 | F10 | Finalized converted invoice recalculated | Voided (F9) and replaced by a new charge-currency draft that converts at its own finalize |
 | F11 | ERP customer bound to another currency and creation of a counterpart fails | Sync fails, naming the currency. The invoice is untouched |
+| F12 | Customer row not found at finalize (deleted after the draft was created) | Treated as no billing currency; Info log; the invoice finalizes in the charge currency as today |
+| F13 | Payment recorded against an unconverted draft of a cross-currency customer | Rejected before any write (G17). The caller finalizes first, then pays in the billing currency |
+| F14 | Stripe outbound sync of a converted invoice for a customer locked to another currency in Stripe | Sync fails naming the currency (§7.3). Nothing else changes |
 
 ---
 
@@ -958,6 +1025,10 @@ Extend the existing service test files — `invoice_test.go`, `subscription_test
 | T33 | Refund CN to wallet on a converted invoice | rejected in Phase 1 (G30); `BACK_TO_SOURCE` works in INR |
 | T34 | Delete the only rate a live subscription depends on | 409 listing the dependant (G4); delete of a shadowed rate succeeds |
 | T35 | `resolve` and finalize over one fixture | identical rate and scope |
+| T45 | Offline payment recorded on a USD draft of an INR-billed customer | rejected (G17); the same call on a draft of a NULL-billing-currency customer succeeds as today |
+| T46 | Finalize with no rate, through `FinalizeInvoiceActivity` | non-retryable application error; invoice DRAFT; picked up by `IsFinalizationDue` after a rate is added |
+| T47 | Auto top-up fires on a USD wallet of an INR-billed customer | skipped with an Info log; alert still recorded; no error surfaced |
+| T48 | Every guard in §1.4 against a customer with `billing_currency = NULL` | no new branch taken — asserted per row with a repo spy on `fx_rates` and the customer read |
 
 **Credit notes**
 
@@ -993,7 +1064,10 @@ Extend the existing service test files — `invoice_test.go`, `subscription_test
 | 5 | Deploy code. Nothing changes for any customer until a `billing_currency` is set | **Setting one is the irreversible act** for that customer's next invoice |
 
 No backfill of any kind. `make generate-ent`, `make generate-migration`, then hand-check that the
-SQL is four additive statements and one index swap.
+SQL is four additive statements and one index swap. Build the new unique index on
+`entity_integration_mappings` with `CREATE UNIQUE INDEX CONCURRENTLY` before dropping the old one;
+`customers` and `invoices` are large and the `ADD COLUMN … NULL` forms are metadata-only in
+Postgres, so nothing here locks a table for long.
 
 ### 10.2 Sequencing — Phase 1 PRs
 
@@ -1011,6 +1085,10 @@ SQL is four additive statements and one index swap.
 8. **Display** — PDF template and portal read `fx_conversion`.
 9. **Egress** — send the frozen rate; per-currency mapping (§7). Coordinate with `feat/fx-rates`,
    which owns the provider-currency work this builds on; land that branch first.
+10. **Surface** — `make swagger` and `make sdk-all` after steps 2, 3 and 4 so the SDKs and the MCP
+    server carry `fx-rates`, `billing_currency` and `fx_conversion`; dashboard work (rate list with
+    scope picker, `resolve` preview, billing-currency field with the G7 error rendered as a list,
+    draft banner from `billing_currency_estimate`) follows the same steps.
 
 Steps 1–3 can ship to production ahead of 4: they are inert without step 4 and let a tenant
 configure rates before the switch. Step 4 is the release.

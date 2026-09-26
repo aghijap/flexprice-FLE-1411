@@ -36,6 +36,13 @@ already been frozen, the frozen value rather than a fresh resolution.
 and come out in the wallet's currency. The rate is applied to the money on the other side of the
 wallet — the top-up invoice, the refund — and recorded next to it.
 
+**Inertness.** Every Phase 2 path fires on `fx_conversion != nil` (stamp, credit-note wallet leg,
+fallback reroute) or on a set billing currency that differs from the wallet's (H1, the balance
+estimate). The two new endpoints — refund and migrate — are opt-in operations that do not exist
+today; for a customer with no billing currency they run with a rate of 1 and change nothing else.
+A customer with `billing_currency = NULL` sees no behaviour change from Phase 2, as from Phase 1
+(Phase 1 §1.4).
+
 ---
 
 ## 2. Data model
