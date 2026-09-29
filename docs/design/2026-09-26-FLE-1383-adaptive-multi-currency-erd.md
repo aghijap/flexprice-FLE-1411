@@ -558,7 +558,7 @@ All checks run in the service layer. Errors name the currency pair and the IDs i
 | --- | --- | --- |
 | Valid input | `from ≠ to`, `rate > 0`, valid codes. Custom currency codes are not allowed on either side; they convert through the custom currency config (§5.5). For subscription scope, the subscription's currency must equal `from`. When both `valid_from` and `valid_to` are set, `valid_from` must be earlier | `FXRateService.Create`, `FXRateService.Update` |
 | One tenant rate per pair | A second tenant rate for the same pair returns `409`. Update the existing one instead | Unique index, plus a pre-check for a clear error |
-| Override needs a tenant rate | A customer or subscription rate is rejected if no tenant rate exists for the pair | `FXRateService.Create` |
+| Override needs a tenant rate | A customer or subscription rate is rejected if no tenant rate exists for the pair. This includes an `fx_rate` sent on subscription create | `FXRateService.Create` |
 | No overlapping override windows | Checked on create and update. A missing `valid_from` counts as the beginning of time and a missing `valid_to` as the end. Overlap returns `409` | `FXRateService.Create`, `FXRateService.Update` |
 | Tenant rates cannot be removed | Delete, and any update that archives a tenant rate, are rejected. Only its `rate` and `metadata` can change | `FXRateService.Update`, `FXRateService.Delete` |
 | Overrides can be removed freely | Deleting a customer or subscription override is always safe, because the tenant rate for the pair always exists as the fallback | `FXRateService.Delete` |
@@ -601,14 +601,16 @@ flowchart TD
     CF -- yes --> CREATE3["Create. Invoices convert C → billing currency<br/>through the custom factor, no FX"]
     CF -- no --> RJC["400: C has no conversion factor for the billing currency"]
     B -- no --> CREATE["Create as today<br/>an fx_rate in the request is rejected"]
-    B -- "yes, C is fiat" --> INL{"fx_rate in the request?"}
-    INL -- yes --> ROW["Create a subscription-scope rate<br/>in the same transaction"] --> CREATE2["Create subscription"]
-    INL -- no --> RES{"rate at customer or tenant scope?"}
-    RES -- found --> CREATE2
-    RES -- "not found" --> RJ["400: No exchange rate configured for C → billing currency"]
+    B -- "yes, C is fiat" --> TR{"tenant rate exists<br/>for C → billing currency?"}
+    TR -- no --> RJ["400: No exchange rate configured for C → billing currency.<br/>Set a tenant rate first"]
+    TR -- yes --> INL{"fx_rate in the request?"}
+    INL -- yes --> ROW["Also create a subscription-scope rate<br/>in the same transaction"] --> CREATE2["Create subscription"]
+    INL -- no --> CREATE2
 ```
 
 - Enforced in `createSubscription`, next to the existing currency check.
+- Every override needs a tenant rate for the same pair (§8.1), including an `fx_rate` sent on
+  subscription create. Because no override can exist without one, checking the tenant rate is enough.
 - A custom-currency subscription never uses `fx_rates`, and an `fx_rate` in its request is rejected.
 - The same check runs before a checkout session opens, so a customer is never shown a price that
   cannot be invoiced.
@@ -731,7 +733,7 @@ by wildcard. `search` is tagged `@x-scope "read"`, since it uses POST but only r
 | --- | --- |
 | Customer create and update | New optional `billing_currency`. `null` clears it |
 | Customer response | New `billing_currency` |
-| Subscription create | New optional `fx_rate: { rate }`. Creates a subscription-scope rate in the same transaction. Rejected when there is nothing to convert |
+| Subscription create | New optional `fx_rate: { rate }`. Creates a subscription-scope rate in the same transaction. Rejected when there is nothing to convert, or when no tenant rate exists for the pair |
 | Subscription `GET /:id` response | New `billing` block: billing currency, rate, rate id, scope. Calculated on read, not on list or search |
 
 Deleting a customer or subscription archives its scoped rates.
@@ -819,6 +821,7 @@ Wallet APIs are unchanged. Top-up, balance and transaction endpoints keep their 
 | No rate for a pair (`resolve`, subscription create, one-off invoice, checkout session) | 404 / 400 | The pair and every scope checked |
 | Setting a billing currency with missing rates | 400 | Every missing pair, with the subscription or wallet id |
 | Second tenant rate for a pair, or overlapping override windows | 409 | The existing rate id |
+| Override, or `fx_rate` on subscription create, with no tenant rate for the pair | 400 | The pair |
 | Deleting or archiving a tenant rate | 400 | The rate id. Update its value instead |
 | Payment on an unconverted draft | 400 | The billing currency the invoice will be issued in |
 | Custom currency with no factor for the billing currency | 400 | The custom currency and the billing currency |
