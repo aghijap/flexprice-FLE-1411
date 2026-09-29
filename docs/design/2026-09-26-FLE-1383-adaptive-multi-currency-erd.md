@@ -36,6 +36,9 @@ configured. The rate is saved on the invoice and never changes after that.
 refund of unused credits at the purchase rate, moving a prepaid balance into a postpaid wallet, and
 showing a wallet balance in the billing currency. See open question 2.
 
+**Integrations are unchanged.** The invoice is issued in the billing currency and the customer syncs
+to the ERP in that same currency, so Zoho, QuickBooks and Stripe sync as today. No FX rate is sent.
+
 ### 1.4 Terms
 
 | Term | Meaning |
@@ -84,7 +87,7 @@ flowchart LR
         direction TB
         PAY["Payments, postpaid wallet"]
         CN["Credit notes, refunds, void"]
-        ERP["Zoho / QuickBooks with the frozen rate"]
+        ERP["ERP and Stripe sync, as today"]
         PDF["PDF, portal, webhooks, API"]
     end
     FIN2 --> PAY
@@ -106,7 +109,7 @@ flowchart LR
 - The invoice saves `fx_conversion`: charge `usd`, billing `inr`, rate 83, source net $80.
 - Each line keeps its original USD amount next to the converted INR amount.
 - Tax is 18% of ₹8,300. As today, tax is calculated on the subtotal less discounts, before prepaid credits.
-- Acme pays ₹8,134.00. Zoho or QuickBooks receives an INR invoice with exchange rate 83.
+- Acme pays ₹8,134.00. The INR invoice syncs to the ERP as today.
 
 ---
 
@@ -126,7 +129,6 @@ erDiagram
     INVOICES       ||--o{ INVOICE_LINE_ITEMS : "invoice_id"
     INVOICES       ||--o{ PAYMENTS      : "currency = invoice.currency"
     INVOICES       ||--o{ CREDIT_NOTES  : "currency = invoice.currency"
-    CUSTOMERS      ||--o{ ENTITY_INTEGRATION_MAPPINGS : "one ERP customer per currency"
 
     CUSTOMERS {
         varchar(50)  id PK
@@ -173,12 +175,6 @@ erDiagram
         varchar(10)  currency "unchanged"
         varchar(20)  wallet_type "PRE_PAID | POST_PAID (unchanged)"
     }
-    ENTITY_INTEGRATION_MAPPINGS {
-        varchar(50)  entity_id "customer_id"
-        varchar(50)  provider_type
-        varchar(10)  currency "NEW — '' for old rows"
-        varchar(50)  provider_entity_id
-    }
 ```
 
 ### 3.2 Schema changes
@@ -189,7 +185,6 @@ erDiagram
 | `fx_rates` | New table | Rates the tenant configures, at tenant, customer or subscription scope |
 | `invoices` | Add `fx_conversion`, nullable jsonb | The frozen rate and the original amounts. NULL means never converted |
 | `invoice_line_items` | Add `original_currency`, `original_amount`, nullable | Each line's pre-conversion amount, shown exactly on the PDF and API |
-| `entity_integration_mappings` | Add `currency`, default `''`, and add it to the unique index | Zoho and QuickBooks need one ERP customer per currency |
 
 Wallets and wallet transactions are not changed. No backfill anywhere.
 
@@ -278,19 +273,6 @@ never clear it.
 The PDF, portal and API read these directly, so the original amount per line is exact. No screen
 divides by the rate.
 
-### 3.7 `entity_integration_mappings.currency`
-
-Zoho and QuickBooks lock a customer to one currency once it has transactions. Today the mapping
-allows one ERP customer per Flexprice customer per provider, so a customer billed in two currencies
-over time has nowhere to sync the second one.
-
-| Column | Type | Default | Notes |
-| --- | --- | --- | --- |
-| `currency` | `varchar(10)` | `''` | The currency the ERP entity is bound to. `''` for invoice, plan and price mappings, and for old rows |
-
-The unique index becomes `(tenant_id, environment_id, entity_type, entity_id, provider_type, currency)`
-on published rows. How old rows are handled is in §8.2.
-
 ---
 
 ## 4. Rate resolution
@@ -338,7 +320,7 @@ Every draft is created in the currency its caller passes, as today:
 | Quantity change proration | Subscription currency |
 
 Compute, recompute, coupons, previews and wallet balance reads all work on charge-currency amounts
-and are not changed. The API can show a billing-currency estimate on a draft (§10.3). It is
+and are not changed. The API can show a billing-currency estimate on a draft (§9.3). It is
 calculated on read and never saved.
 
 ### 5.2 Finalization
@@ -396,7 +378,7 @@ usually zero and at most ±0.01.
 | `subtotal`, `total_discount`, `total_prepaid_credits_applied`, `total`, `amount_due` | Yes |
 | Line `amount`, `line_item_discount`, `invoice_level_discount`, `prepaid_credits_applied` | Yes |
 | `total_tax` | Calculated in step 6 |
-| `amount_paid`, `amount_remaining` | No. `amount_paid` is 0 when converting (§9.4), so `amount_remaining` equals `amount_due` |
+| `amount_paid`, `amount_remaining` | No. `amount_paid` is 0 when converting (§8.4), so `amount_remaining` equals `amount_due` |
 | `adjustment_amount`, `refunded_amount` | No. Zero on a draft |
 | Line `quantity`, `price_unit_amount` | No. Not money in a currency |
 
@@ -411,7 +393,7 @@ A converted invoice is a normal INR invoice. Code after finalization needs no FX
 | Prepaid wallet | Never pays invoices. Already applied before conversion |
 | Credit notes and refunds | In INR (§7) |
 | Void | Prepaid credits go back in the charge currency (§6.3) |
-| Zoho, QuickBooks, Stripe | §8 |
+| ERP and Stripe sync | As today. The invoice and the synced customer are both in the billing currency |
 | Recalculating a finalized invoice | Voids it and creates a new charge-currency draft, which converts at its own finalize |
 
 A customer with USD and EUR subscriptions gets two INR invoices, each converted on its own.
@@ -503,54 +485,11 @@ checked against the existing per-line limit.
 
 ---
 
-## 8. Integrations
-
-```mermaid
-flowchart TD
-    E["invoice.update.finalized"] --> FXQ{"fx_conversion set?"}
-    FXQ -- no --> LEG["As today: ERP's own rate, existing customer mapping"]
-    FXQ -- yes --> RATE["exchange_rate = frozen rate"]
-    RATE --> MAP{"mapping for this customer<br/>in the invoice currency?"}
-    MAP -- yes --> POST["Post the invoice in its own currency"]
-    MAP -- no --> LEGM{"old mapping with currency = ''<br/>and ERP customer in the invoice currency?"}
-    LEGM -- yes --> STAMP["Save the currency on the old row"] --> POST
-    LEGM -- no --> NEW["Create 'Acme Corp (INR)' in the ERP<br/>and a new mapping row"] --> POST
-    NEW -- "creation fails" --> FAIL["Sync fails naming the currency<br/>invoice unchanged"]
-```
-
-### 8.1 Frozen rate in the ERP
-
-| Invoice | Rate sent to Zoho (`exchange_rate`) and QuickBooks (`ExchangeRate`) |
-| --- | --- |
-| Converted | The frozen rate from `fx_conversion` |
-| Not converted | The ERP's own rate, as today |
-
-**Release note.** For converted invoices, the ERP ledger uses the tenant's configured rate, not the
-ERP's market rate.
-
-### 8.2 One ERP customer per currency
-
-This runs only for converted invoices. Every other invoice finds its ERP customer exactly as today.
-
-| Step | Condition | Action |
-| --- | --- | --- |
-| 1 | A mapping exists for this customer in the invoice currency | Use it |
-| 2 | An old mapping with `currency = ''` exists and its ERP customer is in the invoice currency | Save the currency on that row and use it |
-| 3 | Otherwise | Create an ERP customer named with the currency, for example "Acme Corp (INR)", and a mapping row |
-
-### 8.3 Stripe outbound invoice sync
-
-Stripe locks a customer to one currency once it has an invoice. A converted INR invoice for a Stripe
-customer with USD history is rejected by Stripe. This design does not create per-currency Stripe
-customers: the sync fails, names the currency and leaves the invoice unchanged. See open question 3.
-
----
-
-## 9. Guardrails
+## 8. Guardrails
 
 All checks run in the service layer. Errors name the currency pair and the IDs involved.
 
-### 9.1 Configuring rates
+### 8.1 Configuring rates
 
 | Rule | Detail |
 | --- | --- |
@@ -561,7 +500,7 @@ All checks run in the service layer. Errors name the currency pair and the IDs i
 | No delete that strands a subscription | Refused if a live subscription or open draft would be left with no rate. The error lists up to 20 of them |
 | Tenant and environment isolation | A staging rate never applies in production |
 
-### 9.2 Setting a billing currency
+### 8.2 Setting a billing currency
 
 ```mermaid
 flowchart TD
@@ -582,7 +521,7 @@ flowchart TD
 - Finalized invoices never change. Open drafts use the value at their own finalize.
 - Recommended practice: set it when creating the customer, so ERP sync starts in the right currency.
 
-### 9.3 Creating a subscription
+### 8.3 Creating a subscription
 
 ```mermaid
 flowchart TD
@@ -600,7 +539,7 @@ flowchart TD
 - Subscription currency cannot change. Plan change keeps the same currency.
 - Plan changes, addons and proration need no new check. Their invoices convert at finalize.
 
-### 9.4 Invoices
+### 8.4 Invoices
 
 | Rule | Detail |
 | --- | --- |
@@ -613,11 +552,11 @@ flowchart TD
 | Tax in the billing currency | Tax is recalculated after conversion. Tax rates are percentages found by entity, so nothing converts |
 | One-off invoices follow the billing currency | A USD request for a customer billed in INR produces an INR invoice. A missing rate fails the create call |
 
-### 9.5 Wallets, payments and credit notes
+### 8.5 Wallets, payments and credit notes
 
 | Rule | Detail |
 | --- | --- |
-| Wallets can be created in any currency | No new restriction. See open question 4 |
+| Wallets can be created in any currency | No new restriction. See open question 3 |
 | Postpaid wallets pay only matching invoices | A postpaid wallet pays an invoice only when their currencies match |
 | Payment currency equals invoice currency | As today |
 | Credit notes are in the invoice currency | As today |
@@ -625,12 +564,12 @@ flowchart TD
 
 ---
 
-## 10. API
+## 9. API
 
 New endpoints follow the `/taxes/rates` pattern: a private group, writes gated on a new `EntityFXRate`
 permission, and `@x-scope` on every handler.
 
-### 10.1 FX rates
+### 9.1 FX rates
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -647,7 +586,7 @@ Create body: `scope`, `scope_id`, `from_currency`, `to_currency`, `rate`, option
 
 Webhooks: `fx_rate.created`, `fx_rate.updated`, `fx_rate.deleted`.
 
-### 10.2 Customers and subscriptions
+### 9.2 Customers and subscriptions
 
 | Resource | Change |
 | --- | --- |
@@ -658,7 +597,7 @@ Webhooks: `fx_rate.created`, `fx_rate.updated`, `fx_rate.deleted`.
 
 Deleting a customer or subscription archives its scoped rates.
 
-### 10.3 Invoices
+### 9.3 Invoices
 
 | Field | Where | Notes |
 | --- | --- | --- |
@@ -673,9 +612,8 @@ Deleting a customer or subscription archives its scoped rates.
 | --- | --- |
 | Invoice API and webhooks | `fx_conversion` and line original amounts. Webhooks wrap the invoice response, so no builder change |
 | PDF and customer portal | "₹8,300.00 (converted from $100.00 at 83.00)" on totals and on each line |
-| Zoho and QuickBooks | The invoice in its own currency with the frozen rate (§8.1) |
 
-### 10.4 Error responses
+### 9.4 Error responses
 
 | Case | Status | Message names |
 | --- | --- | --- |
@@ -687,7 +625,7 @@ Deleting a customer or subscription archives its scoped rates.
 
 ---
 
-## 11. Failure modes
+## 10. Failure modes
 
 | Failure | Behaviour |
 | --- | --- |
@@ -697,17 +635,15 @@ Deleting a customer or subscription archives its scoped rates.
 | Rate edited after finalize | No effect. The invoice keeps its frozen rate |
 | Finalize retried after conversion | Conversion skipped |
 | Customer deleted after the draft was created | Treated as no billing currency; the invoice finalizes in the charge currency |
-| ERP customer creation fails | Sync fails naming the currency; invoice unchanged |
-| Stripe customer locked to another currency | Stripe sync fails naming the currency |
 
 ---
 
-## 12. Test plan
+## 11. Test plan
 
 Extend `invoice_test.go`, `subscription_test.go`, `customer_test.go`, `wallet_test.go` and
 `refund_test.go`. Add `fx_rate_test.go` and `fx_convert_test.go`.
 
-### 12.1 Existing customers
+### 11.1 Existing customers
 
 | Case | Expected |
 | --- | --- |
@@ -716,7 +652,7 @@ Extend `invoice_test.go`, `subscription_test.go`, `customer_test.go`, `wallet_te
 | Every path in Appendix A, no billing currency | No new branch runs |
 | Payment on a draft, no billing currency | Accepted, as today |
 
-### 12.2 Rates and resolution
+### 11.2 Rates and resolution
 
 | Case | Expected |
 | --- | --- |
@@ -735,7 +671,7 @@ Extend `invoice_test.go`, `subscription_test.go`, `customer_test.go`, `wallet_te
 | One-off invoice, no subscription | Subscription scope skipped |
 | `resolve` and finalize on the same data | Same rate and scope |
 
-### 12.3 Conversion
+### 11.3 Conversion
 
 | Case | Expected |
 | --- | --- |
@@ -747,7 +683,7 @@ Extend `invoice_test.go`, `subscription_test.go`, `customer_test.go`, `wallet_te
 | Line originals | `original_currency` and `original_amount` equal the draft's values |
 | Rate too small for the precision | Error, nothing written |
 
-### 12.4 Invoice lifecycle
+### 11.4 Invoice lifecycle
 
 | Case | Expected |
 | --- | --- |
@@ -761,7 +697,7 @@ Extend `invoice_test.go`, `subscription_test.go`, `customer_test.go`, `wallet_te
 | Custom-currency subscription, INR billing | `mac → usd` frozen, then `usd → inr` |
 | Rate edited between compute and finalize | Draft uses the new rate; finalized invoices unchanged |
 
-### 12.5 Guardrails
+### 11.5 Guardrails
 
 | Case | Expected |
 | --- | --- |
@@ -773,7 +709,7 @@ Extend `invoice_test.go`, `subscription_test.go`, `customer_test.go`, `wallet_te
 | One-off invoice created as paid, billing currency differs | Rejected |
 | Delete the only rate a subscription needs | 409 listing the subscription |
 
-### 12.6 Wallets and credit notes
+### 11.6 Wallets and credit notes
 
 | Case | Expected |
 | --- | --- |
@@ -785,20 +721,11 @@ Extend `invoice_test.go`, `subscription_test.go`, `customer_test.go`, `wallet_te
 | Refund `PREPAID_WALLET` on a converted invoice | Rejected |
 | Credit note line with `source_amount: 50`, frozen rate 83 | Saved as ₹4,150 even if the live rate is now 85 |
 
-### 12.7 Integrations
-
-| Case | Expected |
-| --- | --- |
-| Converted invoice to Zoho or QuickBooks | Frozen rate sent |
-| Invoice never converted | ERP's own rate, as today |
-| Customer mapped in USD, INR invoice | New ERP customer and mapping with `currency = inr` |
-| Old mapping whose ERP customer is already in the invoice currency | Currency saved on the row; mapping reused |
-
 ---
 
-## 13. Rollout
+## 12. Rollout
 
-### 13.1 Migration
+### 12.1 Migration
 
 | Step | Change | Reversible |
 | --- | --- | --- |
@@ -806,30 +733,28 @@ Extend `invoice_test.go`, `subscription_test.go`, `customer_test.go`, `wallet_te
 | 2 | Add `customers.billing_currency`, nullable | Yes |
 | 3 | Add `invoices.fx_conversion`, nullable | Yes |
 | 4 | Add `invoice_line_items.original_currency` and `original_amount`, nullable | Yes |
-| 5 | Add `entity_integration_mappings.currency` with default `''` and rebuild the unique index. Build the new index concurrently, then drop the old one by hand, since Ent does not drop it | Yes |
-| 6 | Deploy the code | Nothing changes until a customer gets a billing currency |
+| 5 | Deploy the code | Nothing changes until a customer gets a billing currency |
 
 All changes are additive, with no backfill. Nullable columns do not rewrite large tables in Postgres.
 
-### 13.2 PR order
+### 12.2 PR order
 
 1. Schema, types and repositories, with round-trip tests. No behaviour change.
-2. FX rate service and API, with the §9.1 rules.
-3. Customer billing currency, with the §9.2 checks.
+2. FX rate service and API, with the §8.1 rules.
+3. Customer billing currency, with the §8.2 checks.
 4. Conversion in finalize, tax for converted invoices, and the draft estimate. **This is the release.**
 5. Subscription create check and inline rate.
 6. Checkout drafts.
 7. Void split and the refund-to-wallet block.
 8. PDF and portal.
-9. Zoho and QuickBooks sync. Merge `feat/fx-rates` first.
-10. Swagger, SDKs and dashboard.
+9. Swagger, SDKs and dashboard.
 
 PRs 1 to 3 can reach production first. They change nothing on their own and let tenants set up rates
 before conversion is switched on.
 
 ---
 
-## 14. Decisions log
+## 13. Decisions log
 
 | Decision | Rationale |
 | --- | --- |
@@ -849,11 +774,11 @@ before conversion is switched on.
 | No live-rate feed | Out of scope. A feed later changes the lookup, not the table |
 | Back-to-source refunds use no rate | The payment, invoice and credit note are all INR; the gateway returns what it took |
 | A wallet balance is never converted | $1 of USD credit always buys $1 of USD usage. Conversion happens only on invoices |
-| Per-currency ERP customer only for converted invoices | Existing invoices keep today's sync behaviour |
+| No FX data sent to ERPs | The invoice and the synced customer are both in the billing currency. The ERP's own rate to its base currency is unchanged |
 
 ---
 
-## 15. Open questions
+## 14. Open questions
 
 1. **Which date picks a time-limited rate?** Resolution uses the finalize time. An October invoice
    finalized on 1 November would use a November-only override. Should resolution use the invoice's
@@ -862,12 +787,10 @@ before conversion is switched on.
    rate at refund time), cash refunds of unused credits at the purchase rate, prepaid to postpaid
    moves, and wallet balances shown in the billing currency. This design defers all four. Confirm
    with product that launch does not need them.
-3. **Stripe customers.** Should per-currency Stripe customers be added, like the ERPs, before tenants
-   using Stripe sync can set a billing currency on customers with Stripe history?
-4. **Postpaid wallets in another currency.** Wallet creation is unrestricted, so a postpaid wallet
+3. **Postpaid wallets in another currency.** Wallet creation is unrestricted, so a postpaid wallet
    not in the billing currency can never pay that customer's invoices. Reject it at creation, or
    allow it on purpose?
-5. **Deleting a tenant rate that overrides depend on.** Overrides require a tenant rate at creation.
+4. **Deleting a tenant rate that overrides depend on.** Overrides require a tenant rate at creation.
    Should deleting the tenant rate be blocked while overrides for the pair exist?
 
 ---
@@ -888,7 +811,6 @@ Every path below behaves exactly as today for a customer with no billing currenc
 | Void | The invoice has `fx_conversion` |
 | `FinalizeCreditNote`, wallet target | The invoice has `fx_conversion` |
 | Grouped-invoice merge | Invoicing customer has a billing currency |
-| Zoho, QuickBooks, Stripe sync | The invoice has `fx_conversion` |
 | Invoice, customer, subscription responses | Always, but new fields are null |
 
 ## Appendix B — Codebase anchors
@@ -911,7 +833,5 @@ Every path below behaves exactly as today for a customer with no billing currenc
 | Temporal finalize retry policy | [invoice_activities.go:163](../../internal/temporal/activities/invoice/invoice_activities.go#L163) |
 | Invoice webhook payload | [payload/invoice.go:27](../../internal/webhook/payload/invoice.go#L27) |
 | PDF data | [domain/pdf/model.go:11](../../internal/domain/pdf/model.go#L11) |
-| Stripe invoice sync | [stripe/invoice_sync.go:49](../../internal/integration/stripe/invoice_sync.go#L49) |
-| ERP mapping unique key | [entityintegrationmapping.go:71](../../ent/schema/entityintegrationmapping.go#L71) |
 | Router pattern | [router.go:527](../../internal/api/router.go#L527) |
 | Custom currency | [design](2026-08-27-FLE-1201-tenant-custom-currency.md); [`custom_currency.go`](../../internal/types/custom_currency.go) |
