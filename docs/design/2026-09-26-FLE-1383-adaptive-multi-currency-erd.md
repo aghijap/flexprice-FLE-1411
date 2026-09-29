@@ -398,16 +398,19 @@ A customer with USD and EUR subscriptions gets two INR invoices, each converted 
 
 ### 5.5 Tenant custom currency
 
-`invoices.custom_currency` (FLE-1201) converts a tenant-defined unit, for example `mac`, into fiat at
-draft creation. `fx_conversion` converts fiat to fiat at finalization. They are separate columns and
-separate code.
+A custom currency (FLE-1201), for example `mac`, is converted to fiat when the draft is created,
+using the factors in the tenant's custom currency config. FX never applies to a custom currency, so
+there is only ever one conversion.
 
-| Subscription currency | Billing currency | At finalize |
-| --- | --- | --- |
-| `usd` | none or `usd` | As today |
-| `usd` | `inr` | FX `usd → inr` |
-| `mac` (custom) | none | Custom rate `mac → usd` frozen, as today |
-| `mac` (custom) | `inr` | Custom rate `mac → usd` frozen, then FX `usd → inr` |
+| Subscription currency | Customer billing currency | Draft currency | At finalize |
+| --- | --- | --- | --- |
+| `mac` (custom) | none | Tenant default fiat, for example `usd` | Custom rate `mac → usd` frozen, as today |
+| `mac` (custom) | `inr`, and `mac` has an `inr` factor | `inr` | Custom rate `mac → inr` frozen. No FX, no `fx_conversion` |
+| `mac` (custom) | `inr`, and `mac` has no `inr` factor | — | Not allowed. Subscription create and billing-currency changes reject it (§8.2, §8.3) |
+
+The only code change: when the customer has a billing currency, the draft uses it as the fiat
+currency instead of the tenant default. Finalization already freezes the factor for the invoice's own
+currency. Top-ups of a custom-currency wallet follow the same rule.
 
 ---
 
@@ -491,7 +494,7 @@ All checks run in the service layer. Errors name the currency pair and the IDs i
 
 | Rule | Detail |
 | --- | --- |
-| Valid input | `from ≠ to`, `rate > 0`, valid codes. A custom currency can be `from` but never `to`. For subscription scope, the subscription's currency must equal `from` |
+| Valid input | `from ≠ to`, `rate > 0`, valid codes. Custom currency codes are not allowed on either side; they convert through the custom currency config (§5.5). For subscription scope, the subscription's currency must equal `from` |
 | One tenant rate per pair | A second tenant rate for the same pair returns `409`. Update the existing one instead |
 | Override needs a tenant rate | A customer or subscription rate is rejected if no tenant rate exists for the pair |
 | No overlapping override windows | Checked on create and update. A missing `valid_from` counts as the beginning of time and a missing `valid_to` as the end. Overlap returns `409` |
@@ -506,15 +509,17 @@ flowchart TD
     V -- no --> R1["400"]
     V -- yes --> N{"X is null?"}
     N -- yes --> OK["Save. Invoices follow the charge currency"]
-    N -- no --> S{"rate exists for every active, trialing or paused<br/>subscription with currency ≠ X?"}
+    N -- no --> S{"rate or custom factor exists for every active,<br/>trialing or paused subscription with currency ≠ X?"}
     S -- no --> R2["400 listing the missing pairs"]
-    S -- yes --> W{"rate exists for every wallet<br/>with currency ≠ X?"}
+    S -- yes --> W{"rate or custom factor exists for every wallet<br/>with currency ≠ X?"}
     W -- no --> R3["400 listing the missing pairs"]
     W -- yes --> SAVE["Save. Applies to invoices finalized from now on"]
 ```
 
 - Subscriptions are checked where the customer is the subscriber or the invoicing customer.
 - Wallets are checked because their top-ups convert into the billing currency (§6.2).
+- For a custom-currency subscription or wallet, the check is that the custom currency has a factor
+  for X, not an FX rate (§5.5).
 - Clearing it back to NULL is always allowed.
 - Finalized invoices never change. Open drafts use the value at their own finalize.
 - Recommended practice: set it when creating the customer, so ERP sync starts in the right currency.
@@ -524,14 +529,18 @@ flowchart TD
 ```mermaid
 flowchart TD
     A["Create subscription in currency C"] --> B{"invoicing customer's billing currency<br/>set and different from C?"}
+    B -- "yes, C is a custom currency" --> CF{"C has a factor<br/>for the billing currency?"}
+    CF -- yes --> CREATE3["Create. Invoices convert C → billing currency<br/>through the custom factor, no FX"]
+    CF -- no --> RJC["400: C has no conversion factor for the billing currency"]
     B -- no --> CREATE["Create as today<br/>an fx_rate in the request is rejected"]
-    B -- yes --> INL{"fx_rate in the request?"}
+    B -- "yes, C is fiat" --> INL{"fx_rate in the request?"}
     INL -- yes --> ROW["Create a subscription-scope rate<br/>in the same transaction"] --> CREATE2["Create subscription"]
     INL -- no --> RES{"rate at customer or tenant scope?"}
     RES -- found --> CREATE2
     RES -- "not found" --> RJ["400: No exchange rate configured for C → billing currency"]
 ```
 
+- A custom-currency subscription never uses `fx_rates`, and an `fx_rate` in its request is rejected.
 - The same check runs before a checkout session opens, so a customer is never shown a price that
   cannot be invoiced.
 - Subscription currency cannot change. Plan change keeps the same currency.
@@ -620,6 +629,7 @@ Deleting a customer or subscription archives its scoped rates.
 | Second tenant rate for a pair, or overlapping override windows | 409 | The existing rate id |
 | Deleting a rate that is still needed | 409 | Up to 20 dependent subscriptions or drafts |
 | Payment on an unconverted draft | 400 | The billing currency the invoice will be issued in |
+| Custom currency with no factor for the billing currency | 400 | The custom currency and the billing currency |
 
 ---
 
@@ -692,7 +702,8 @@ Extend `invoice_test.go`, `subscription_test.go`, `customer_test.go`, `wallet_te
 | Worked example in §2 | Wallet −$20 in USD; invoice total ₹8,134.00 |
 | Void of that invoice | $20 back to the USD wallet; paid INR through the refund ledger |
 | USD and EUR subscriptions, INR billing | Two INR invoices, each with its own `fx_conversion` |
-| Custom-currency subscription, INR billing | `mac → usd` frozen, then `usd → inr` |
+| Custom-currency subscription, INR billing, `mac` has an `inr` factor | Draft and invoice in INR; `mac → inr` frozen; no FX, no `fx_conversion` |
+| Custom-currency subscription, no billing currency | Invoice in the tenant default fiat, as today |
 | Rate edited between compute and finalize | Draft uses the new rate; finalized invoices unchanged |
 
 ### 11.5 Guardrails
@@ -706,6 +717,9 @@ Extend `invoice_test.go`, `subscription_test.go`, `customer_test.go`, `wallet_te
 | Payment on an unconverted draft, billing currency differs | Rejected |
 | One-off invoice created as paid, billing currency differs | Rejected |
 | Delete the only rate a subscription needs | 409 listing the subscription |
+| Custom-currency subscription, billing currency without a factor | Rejected |
+| Set a billing currency that a custom-currency subscription has no factor for | Rejected |
+| FX rate with a custom currency code | Rejected |
 
 ### 11.6 Wallets and credit notes
 
