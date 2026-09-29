@@ -27,7 +27,7 @@ configured. The rate is saved on the invoice and never changes after that.
 ### 1.3 Non-goals
 
 - Live market rates.
-- Deriving `inr → usd` from a `usd → inr` rate.
+- Deriving `inr → usd` from a `usd → inr` rate. The one exception is a void refund, which reverses its own invoice at that invoice's frozen rate (§6.3).
 - A Flexprice payment record in a currency other than its invoice's (gateway-level presentment currency is fine).
 - Changing a finalized invoice.
 - Changing a subscription's currency.
@@ -394,7 +394,7 @@ A converted invoice is a normal INR invoice. Code after finalization needs no FX
 | Prepaid wallet | Never pays invoices. Already applied before conversion | `GetWalletsForPayment` picks postpaid wallets only |
 | Balance of a USD prepaid wallet | Counts the draft while it is in USD, stops once it is INR. The wallet was already debited at step 3 | `GetUnpaidInvoicesToBePaid` matches `invoice.currency` |
 | Credit notes and refunds | In INR (§7) | A credit note takes its invoice's currency |
-| Void | Prepaid credits go back in the charge currency (§6.3) | `VoidInvoice` reads `fx_conversion.source` |
+| Void | Full funded value returns to the charge-currency prepaid wallet at the frozen rate (§6.3) | `VoidInvoice` reads `fx_conversion` |
 | ERP and Stripe sync | As today. The invoice and the synced customer are both in the billing currency | No change |
 | Recalculating a finalized invoice | Voids it and creates a new charge-currency draft, which converts at its own finalize | `RecalculateInvoice`; in-place recalculation works on drafts only |
 
@@ -476,8 +476,10 @@ sequenceDiagram
 
 ## 6. Wallets
 
-**A wallet balance is never converted.** Credits go in and come out in the wallet's own currency.
-All conversion happens on invoices. Wallets and wallet transactions have no new fields.
+**A wallet balance is never converted**, with one exception: a void refund reverses its invoice at the
+frozen rate to return everything to the charge-currency wallet (§6.3). Otherwise credits go in and come
+out in the wallet's own currency, and all conversion happens on invoices. Wallets and wallet
+transactions have no new fields.
 
 ### 6.1 Prepaid credits
 
@@ -507,42 +509,47 @@ conversion cannot change them.
 
 ### 6.3 Void
 
-Void returns the full **funded value** to the customer's prepaid wallet. It never refunds to a gateway
-and never returns money to a postpaid wallet:
+Void returns the full **funded value** to the customer's prepaid wallet **in the invoice's charge
+currency**. It never refunds to a gateway and never returns money to a postpaid wallet.
 
-`funded = amount_paid + total_prepaid_credits_applied − refunded_amount` (`invoice.go`).
+`funded = amount_paid + total_prepaid_credits_applied − refunded_amount` (`invoice.go`), all in the
+billing currency.
 
-Only the prepaid-credits part is FX-sensitive: it was spent in the charge currency, while the cash was
-paid in the billing currency. So void returns each part in the currency it came from:
+**Why the charge currency.** A prepaid credit can only be applied to a draft in the wallet's own
+currency (`GetWalletsForCreditAdjustment`), and prepaid wallets never pay finalized invoices. A customer
+on a USD subscription billed in INR has only USD-charge drafts, so an INR credit would be stranded and
+unspendable. Returning the refund to the USD wallet keeps it usable.
 
-| How the invoice was settled | Void returns | Currency | Goes to |
-| --- | --- | --- | --- |
-| Prepaid wallet | The credits, from `fx_conversion.source.total_prepaid_credits_applied` | Charge (USD) | The USD prepaid wallet |
-| Postpaid wallet | The cash it paid | Billing (INR) | A prepaid wallet (INR) |
-| Cash or gateway | The cash it paid | Billing (INR) | A prepaid wallet (INR), never back to the card |
+**How.** Convert the funded value back at the invoice's own **frozen** rate — never the current rate —
+and credit the charge-currency prepaid wallet:
 
-A mixed invoice does both: the cash part in INR and the credits part in USD.
+| Leg | Amount returned | To |
+| --- | --- | --- |
+| Prepaid credits | The exact charge amount from `fx_conversion.source.total_prepaid_credits_applied` | The USD prepaid wallet |
+| Cash (gateway, offline or postpaid wallet) | `(amount_paid − refunded_amount) ÷ frozen_rate`, rounded to charge precision | The USD prepaid wallet |
 
-The cash parts are already in the billing currency, so they are unchanged from today. The one change is
-the credits part: today it is lumped with the cash and returned in the invoice currency (INR), which
-would strand a USD balance in an INR wallet; now it goes back to the USD wallet in USD, never the INR
-amount divided by the rate. This is the only change to the void path.
+Example (rate 100): draft $100, $20 applied from the USD wallet, ₹8,000 cash paid. `funded` = ₹8,000 +
+₹2,000 = ₹10,000 → **$100 back to the USD wallet** — exactly what the customer put in.
 
-**Voiding a paid invoice is a full refund to the wallet.** A `SUCCEEDED` invoice can be voided; doing
-so returns the whole funded value, so the customer gets their money back as wallet credit (never to the
-card) and the invoice ends `REFUNDED`. Void eligibility is unchanged from today: any invoice that is
-`DRAFT`, `FINALIZED` or `SKIPPED`, with a payment status other than `PROCESSING` or `REFUNDED`, and not
-gated on another caller's checkout session.
+The frozen rate makes this an exact reversal: ₹ ÷ frozen returns the original $, with no FX gain or loss.
+The current rate is never used — there is no INR→USD value to draw on, and it would refund more or less
+than was paid. This is a bounded exception to "wallets are never converted" (§6): the one place a rate
+touches a wallet, using the invoice's own frozen rate, only to reverse it.
+
+**Voiding a paid invoice is a full refund.** A `SUCCEEDED` invoice can be voided; the whole funded value
+comes back as wallet credit (never to the card) and the invoice ends `REFUNDED`. Eligibility is unchanged
+from today: any invoice that is `DRAFT`, `FINALIZED` or `SKIPPED`, with a payment status other than
+`PROCESSING` or `REFUNDED`, and not gated on another caller's checkout session.
 
 **Accounting.**
 
-- The split applies only to a converted invoice (`fx_conversion` set). A non-converted invoice, any
-  draft included, follows today's single-currency void untouched.
-- `refunded_amount` is an INR field on the invoice. On void it increases only by the INR **cash**
-  returned. The USD credits leg is recorded on the USD wallet transaction, not folded into
-  `refunded_amount`, which would mix currencies.
-- Prior refunds (from refund credit notes, §7) are always cash, so they reduce only the cash leg. The
-  credits leg always returns in full, from `fx_conversion.source.total_prepaid_credits_applied`.
+- This applies only to a converted invoice (`fx_conversion` set). A non-converted invoice, any draft
+  included, follows today's single-currency void untouched.
+- `refunded_amount` stays a billing-currency (INR) field and records the INR funded value returned, as
+  today. The wallet is credited in the charge currency at the frozen rate, and that conversion is
+  recorded on the wallet transaction, so the field itself never mixes currencies.
+- Prior refunds (from refund credit notes, §7) are cash in INR; they lower `amount_paid − refunded_amount`
+  before the division. The credits leg always returns in full from `fx_conversion.source`.
 
 ---
 
