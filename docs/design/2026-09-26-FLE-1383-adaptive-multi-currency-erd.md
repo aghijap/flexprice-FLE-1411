@@ -393,7 +393,7 @@ A converted invoice is a normal INR invoice. Code after finalization needs no FX
 | Postpaid wallet payment | Only a postpaid wallet in INR can pay | `GetWalletsForPayment` matches `invoice.currency` |
 | Prepaid wallet | Never pays invoices. Already applied before conversion | `GetWalletsForPayment` picks postpaid wallets only |
 | Balance of a USD prepaid wallet | Counts the draft while it is in USD, stops once it is INR. The wallet was already debited at step 3 | `GetUnpaidInvoicesToBePaid` matches `invoice.currency` |
-| Credit notes and refunds | In INR (§7) | A credit note takes its invoice's currency |
+| Credit notes and refunds | In INR; a prepaid-wallet refund converts at the frozen rate (§7) | A credit note takes its invoice's currency |
 | Void | Full funded value returns to the charge-currency prepaid wallet at the frozen rate (§6.3) | `VoidInvoice` reads `fx_conversion` |
 | ERP and Stripe sync | As today. The invoice and the synced customer are both in the billing currency | No change |
 | Recalculating a finalized invoice | Voids it and creates a new charge-currency draft, which converts at its own finalize | `RecalculateInvoice`; in-place recalculation works on drafts only |
@@ -513,7 +513,8 @@ Void returns the full **funded value** to the customer's prepaid wallet **in the
 currency**. It never refunds to a gateway and never returns money to a postpaid wallet.
 
 `funded = amount_paid + total_prepaid_credits_applied − refunded_amount` (`invoice.go`), all in the
-billing currency.
+billing currency. This is the whole value the customer put toward the invoice — cash paid plus credits
+spent — so it can exceed the invoice's net total, which already had the credits deducted.
 
 **Why the charge currency.** A prepaid credit can only be applied to a draft in the wallet's own
 currency (`GetWalletsForCreditAdjustment`), and prepaid wallets never pay finalized invoices. A customer
@@ -555,28 +556,33 @@ from today: any invoice that is `DRAFT`, `FINALIZED` or `SKIPPED`, with a paymen
 
 ## 7. Credit notes and refunds
 
-Credit notes are unchanged by this design. A credit note is always issued in its invoice's currency, so
-on a converted invoice it is INR, and today's amounts, limits and refund behaviour all apply in INR
-with no rate. No new columns on `credit_notes`, `credit_note_line_items` or `refunds`.
+A credit note is always issued in its invoice's currency, so on a converted invoice it is INR, and
+today's amounts and limits apply in INR. The refundable amount is the cash the customer paid
+(`amount_paid`); the prepaid credits applied before conversion are returned only by void (§6.3), not by a
+credit note. No new columns on `credit_notes`, `credit_note_line_items` or `refunds`.
 
-- **The refundable amount is the cash the customer paid** (`amount_paid`), exactly as today. On a
-  converted invoice that cash is INR. The prepaid credits applied before conversion (§6.1) are not
-  refundable through a credit note; returning those is void's job (§6.3).
-- **A refund goes back the way the cash came in, in INR**, with no FX-specific routing: `BACK_TO_SOURCE`
-  refunds the INR gateway payment, and a failed gateway refund falls back to an INR wallet, as today.
+On a REFUND credit note the user picks the destination, exactly as today. Only the prepaid-wallet target
+touches a rate:
 
 ```mermaid
 flowchart TD
     CN["Credit note on a converted invoice<br/>currency = INR"] --> T{"type"}
     T -- ADJUSTMENT --> ADJ["amount_due reduced in INR"]
-    T -- REFUND --> GW["Gateway refunds the INR cash payment"]
-    GW -- "gateway refund fails" --> FB["Falls back to an INR wallet, as today"]
+    T -- REFUND --> RT{"refund target"}
+    RT -- BACK_TO_SOURCE --> GW["Gateway refunds the INR to the card.<br/>No conversion. On failure, an INR wallet, as today"]
+    RT -- PREPAID_WALLET --> WAL["Charge-currency wallet,<br/>at the invoice's frozen rate"]
 ```
 
-| Path | Result |
-| --- | --- |
-| Adjustment credit note | Reduces `amount_due` in INR |
-| Refund | Refunds the INR cash the customer paid; on gateway failure, an INR wallet, as today |
+| Target | Where the money goes | Rate |
+| --- | --- | --- |
+| `BACK_TO_SOURCE` | Gateway refunds the INR payment to the card. A failed gateway refund falls back to an INR wallet, as today | None |
+| `PREPAID_WALLET` | The customer's charge-currency prepaid wallet, so the credit is usable on their charge-currency drafts | The invoice's frozen rate |
+
+`BACK_TO_SOURCE` returns the exact INR the gateway took, so no rate is involved. `PREPAID_WALLET` mirrors
+void: the refunded INR is converted back at the invoice's frozen rate and credited to the
+charge-currency wallet, never a live rate. This is the one change to the credit-note path — today a
+wallet refund tops up an invoice-currency wallet; on a converted invoice it now targets the
+charge-currency wallet at the frozen rate.
 
 ---
 
@@ -670,7 +676,7 @@ flowchart TD
 | Wallets can be created in any currency | No new restriction | `CreateWallet` |
 | Postpaid wallets pay only matching invoices | A postpaid wallet pays an invoice only when their currencies match | `GetWalletsForPayment` |
 | Payment currency equals invoice currency | As today | Payment service, existing checks |
-| Credit notes are in the invoice currency | As today. Refundable amount is the cash paid; no rate, no FX-specific routing (§7) | Credit note service, existing |
+| Credit note refunds | Refundable amount is the INR cash paid. `BACK_TO_SOURCE` uses no rate; `PREPAID_WALLET` converts to the charge currency at the frozen rate (§7) | Credit note and refund services |
 
 ---
 
