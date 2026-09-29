@@ -492,14 +492,14 @@ All checks run in the service layer. Errors name the currency pair and the IDs i
 
 ### 8.1 Configuring rates
 
-| Rule | Detail |
-| --- | --- |
-| Valid input | `from ≠ to`, `rate > 0`, valid codes. Custom currency codes are not allowed on either side; they convert through the custom currency config (§5.5). For subscription scope, the subscription's currency must equal `from` |
-| One tenant rate per pair | A second tenant rate for the same pair returns `409`. Update the existing one instead |
-| Override needs a tenant rate | A customer or subscription rate is rejected if no tenant rate exists for the pair |
-| No overlapping override windows | Checked on create and update. A missing `valid_from` counts as the beginning of time and a missing `valid_to` as the end. Overlap returns `409` |
-| No delete that strands a subscription | Refused if a live subscription or open draft would be left with no rate. The error lists up to 20 of them |
-| Tenant and environment isolation | A staging rate never applies in production |
+| Rule | Detail | Enforced in |
+| --- | --- | --- |
+| Valid input | `from ≠ to`, `rate > 0`, valid codes. Custom currency codes are not allowed on either side; they convert through the custom currency config (§5.5). For subscription scope, the subscription's currency must equal `from` | `FXRateService.Create` |
+| One tenant rate per pair | A second tenant rate for the same pair returns `409`. Update the existing one instead | Unique index, plus a pre-check for a clear error |
+| Override needs a tenant rate | A customer or subscription rate is rejected if no tenant rate exists for the pair | `FXRateService.Create` |
+| No overlapping override windows | Checked on create and update. A missing `valid_from` counts as the beginning of time and a missing `valid_to` as the end. Overlap returns `409` | `FXRateService.Create`, `FXRateService.Update` |
+| No delete that strands a subscription | Refused if a live subscription or open draft would be left with no rate. The error lists up to 20 of them | `FXRateService.Delete` |
+| Tenant and environment isolation | A staging rate never applies in production | Base mixins and query filters |
 
 ### 8.2 Setting a billing currency
 
@@ -516,6 +516,7 @@ flowchart TD
     W -- yes --> SAVE["Save. Applies to invoices finalized from now on"]
 ```
 
+- Enforced in `CustomerService.Create` and `CustomerService.Update`.
 - Subscriptions are checked where the customer is the subscriber or the invoicing customer.
 - Wallets are checked because their top-ups convert into the billing currency (§6.2).
 - For a custom-currency subscription or wallet, the check is that the custom currency has a factor
@@ -540,6 +541,7 @@ flowchart TD
     RES -- "not found" --> RJ["400: No exchange rate configured for C → billing currency"]
 ```
 
+- Enforced in `createSubscription`, next to the existing currency check.
 - A custom-currency subscription never uses `fx_rates`, and an `fx_rate` in its request is rejected.
 - The same check runs before a checkout session opens, so a customer is never shown a price that
   cannot be invoiced.
@@ -548,26 +550,26 @@ flowchart TD
 
 ### 8.4 Invoices
 
-| Rule | Detail |
-| --- | --- |
-| No rate means no finalize | The invoice stays DRAFT and nothing is written. Never a rate of 1, never a guess. Logged at `Error`. Marked as an invalid-operation error, so Temporal does not retry it. The scheduled finalizer picks the draft up once a rate exists |
-| Convert once | Skipped when `fx_conversion` is already set |
-| No payment before conversion | A payment on an unconverted draft is rejected when the customer's billing currency differs: "Finalize the invoice first; it will be issued in INR." Same for a one-off invoice created as already paid. Today payments on drafts are allowed |
-| Converted checkout draft is frozen | Recompute and manual line edits are rejected. Void is allowed |
-| Conversion checks itself | Lines add up to the net; a non-zero net never converts to zero; an all-zero invoice converts to zeros |
-| One charge currency per invoice | Grouped invoicing merges child lines with no currency check today. When the invoicing customer has a billing currency, a child in a different currency is billed on its own invoice |
-| Tax in the billing currency | Tax is recalculated after conversion. Tax rates are percentages found by entity, so nothing converts |
-| One-off invoices follow the billing currency | A USD request for a customer billed in INR produces an INR invoice. A missing rate fails the create call |
+| Rule | Detail | Enforced in |
+| --- | --- | --- |
+| No rate means no finalize | The invoice stays DRAFT and nothing is written. Never a rate of 1, never a guess. Logged at `Error`. Marked as an invalid-operation error, so Temporal does not retry it. The scheduled finalizer picks the draft up once a rate exists | Finalize, step 4 |
+| Convert once | Skipped when `fx_conversion` is already set | Finalize, step 4 |
+| No payment before conversion | A payment on an unconverted draft is rejected when the customer's billing currency differs: "Finalize the invoice first; it will be issued in INR." Same for a one-off invoice created as already paid. Today payments on drafts are allowed | `CreateInvoice`, `validateInvoicePaymentEligibility` |
+| Converted checkout draft is frozen | Recompute and manual line edits are rejected. Void is allowed | Invoice recompute and line-edit entry points |
+| Conversion checks itself | Lines add up to the net; a non-zero net never converts to zero; an all-zero invoice converts to zeros | Finalize, step 5 |
+| One charge currency per invoice | Grouped invoicing merges child lines with no currency check today. When the invoicing customer has a billing currency, a child in a different currency is billed on its own invoice | Grouped-invoice merge in the billing service |
+| Tax in the billing currency | Tax is recalculated after conversion. Tax rates are percentages found by entity, so nothing converts | Finalize, step 6 |
+| One-off invoices follow the billing currency | A USD request for a customer billed in INR produces an INR invoice. A missing rate fails the create call | `CreateInvoice` |
 
 ### 8.5 Wallets, payments and credit notes
 
-| Rule | Detail |
-| --- | --- |
-| Wallets can be created in any currency | No new restriction |
-| Postpaid wallets pay only matching invoices | A postpaid wallet pays an invoice only when their currencies match |
-| Payment currency equals invoice currency | As today |
-| Credit notes are in the invoice currency | As today |
-| No refund to a prepaid wallet on a converted invoice | Use `BACK_TO_SOURCE` (§7) |
+| Rule | Detail | Enforced in |
+| --- | --- | --- |
+| Wallets can be created in any currency | No new restriction | `CreateWallet` |
+| Postpaid wallets pay only matching invoices | A postpaid wallet pays an invoice only when their currencies match | `GetWalletsForPayment` |
+| Payment currency equals invoice currency | As today | Payment service, existing checks |
+| Credit notes are in the invoice currency | As today | Credit note service, existing |
+| No refund to a prepaid wallet on a converted invoice | Use `BACK_TO_SOURCE` (§7) | `FinalizeCreditNote` |
 
 ---
 
