@@ -651,54 +651,67 @@ permission, and `@x-scope` on every handler.
 | `DELETE` | `/v1/fx-rates/:id` | Archive. Refused if it would strand a subscription |
 | `GET` | `/v1/fx-rates/resolve` | Show which rate a customer or subscription gets now. Same function as finalize |
 
-**Create request** (`POST /v1/fx-rates`)
+**Create a rate**
 
-| Field | Type | Required | Notes |
-| --- | --- | --- | --- |
-| `scope` | string | Yes | `tenant`, `customer` or `subscription` |
-| `scope_id` | string | Yes, except for `tenant` | Customer id or subscription id. Set to `tenant` by the server for tenant scope |
-| `from_currency` | string | Yes | Charge currency, for example `usd`. Fiat only |
-| `to_currency` | string | Yes | Billing currency, for example `inr`. Fiat only |
-| `rate` | decimal string | Yes | Greater than 0. `to_currency` units per 1 `from_currency` unit |
-| `valid_from` | timestamp | No | Overrides only. Must be null for tenant scope |
-| `valid_to` | timestamp | No | Overrides only. Exclusive. Must be after `valid_from` when both are set |
-| `metadata` | object | No | Free-form key-value pairs |
+```jsonc
+// POST /v1/fx-rates
+{
+  "scope": "customer",            // tenant | customer | subscription
+  "scope_id": "cust_acme",        // omit for tenant scope
+  "from_currency": "usd",         // charge currency, fiat only
+  "to_currency": "inr",           // billing currency, fiat only
+  "rate": "84.50",                // > 0; inr per 1 usd
+  "valid_from": "2026-11-01T00:00:00Z",   // optional, overrides only
+  "valid_to": "2026-12-01T00:00:00Z",     // optional, exclusive, after valid_from
+  "metadata": { "contract": "ACME-2026" } // optional
+}
 
-**Update request** (`PUT /v1/fx-rates/:id`): any of `rate`, `valid_from`, `valid_to`, `status`,
-`metadata`. `scope`, `scope_id` and the currency pair cannot change; create a new rate instead.
+// 201
+{
+  "id": "fxr_01J…",
+  "scope": "customer",
+  "scope_id": "cust_acme",
+  "from_currency": "usd",
+  "to_currency": "inr",
+  "rate": "84.50",
+  "valid_from": "2026-11-01T00:00:00Z",
+  "valid_to": "2026-12-01T00:00:00Z",
+  "status": "published",
+  "metadata": { "contract": "ACME-2026" },
+  "created_at": "2026-10-15T09:30:00Z",
+  "updated_at": "2026-10-15T09:30:00Z"
+}
+```
 
-**Rate response**
+**Update a rate.** Send only the fields to change. `scope`, `scope_id` and the currency pair cannot
+change; create a new rate instead.
 
-| Field | Type | Notes |
-| --- | --- | --- |
-| `id` | string | Prefix `fxr_` |
-| `scope`, `scope_id` | string | As created |
-| `from_currency`, `to_currency` | string | Lowercase |
-| `rate` | decimal string | |
-| `valid_from`, `valid_to` | timestamp or null | Null means unbounded |
-| `status` | string | `published` or `archived` |
-| `metadata` | object | |
-| `created_at`, `updated_at` | timestamp | |
+```jsonc
+// PUT /v1/fx-rates/fxr_01J…
+{ "rate": "85.00", "valid_to": "2026-12-15T00:00:00Z" }
+```
 
-**Resolve request** (`GET /v1/fx-rates/resolve`)
+**Resolve the rate a customer gets now**
 
-| Query param | Required | Notes |
-| --- | --- | --- |
-| `from` | Yes | Charge currency |
-| `to` | Yes | Billing currency |
-| `customer_id` | Yes | The invoicing customer |
-| `subscription_id` | No | Checked first when given |
+```jsonc
+// GET /v1/fx-rates/resolve?from=usd&to=inr&customer_id=cust_acme&subscription_id=subs_pro
+// subscription_id is optional; it is checked first when given
 
-**Resolve response**
+// 200
+{
+  "rate": "84.50",
+  "rate_id": "fxr_01J…",
+  "scope": "customer",            // where it was found
+  "from_currency": "usd",
+  "to_currency": "inr"
+}
 
-| Field | Type | Notes |
-| --- | --- | --- |
-| `rate` | decimal string | The rate finalize would use now |
-| `rate_id` | string | The `fx_rates` row it came from |
-| `scope` | string | Where it was found: `subscription`, `customer` or `tenant` |
-| `from_currency`, `to_currency` | string | Echo of the request |
-
-A missing rate returns `404` with the pair and every scope checked (§9.4).
+// 404
+{
+  "error": "no FX rate configured for usd → inr",
+  "details": { "scopes_checked": ["subscription:subs_pro", "customer:cust_acme", "tenant"] }
+}
+```
 
 Webhooks: `fx_rate.created`, `fx_rate.updated`, `fx_rate.deleted`.
 
