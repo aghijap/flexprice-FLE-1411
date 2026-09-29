@@ -740,6 +740,64 @@ Wallet APIs are unchanged. Top-up, balance and transaction endpoints keep their 
 | `billing_currency_estimate` | Draft invoice and previews | `{ currency, rate, total, resolvable }`. Calculated on read. Shown only when the billing currency differs from the draft's. `resolvable: false` tells the dashboard the draft will fail to finalize |
 | `charge_currency` | Invoice list filter | New filter on the original currency. The existing `currency` filter matches the billing currency |
 
+**Example: a converted invoice**
+
+```jsonc
+// GET /v1/invoices/inv_01M2SYBFVQ4R3FHMJPNSWW2E0P
+{
+  "id": "inv_01M2SYBFVQ4R3FHMJPNSWW2E0P",
+  "invoice_number": "INV-000354",
+  "invoice_status": "FINALIZED",
+
+  // CONVERTED: switched from USD to the customer's billing currency (INR)
+  "currency": "inr",
+  "subtotal": "415.00",
+  "amount_due": "415.00",
+  "total": "415.00",
+
+  // NEW: frozen FX snapshot, written at finalization
+  "fx_conversion": {
+    "charge_currency": "usd",
+    "billing_currency": "inr",
+    "rate": "83.000000000000",
+    "rate_id": "fxr_tnt_001",
+    "scope": "tenant",
+    "converted_at": "2026-09-18T09:42:53Z",
+    "source": {
+      "subtotal": "5.00000000",
+      "total_discount": "0.00000000",
+      "total_prepaid_credits_applied": "0.00000000",
+      "net": "5.00000000"
+    },
+    "rounding_adjustment": "0.00000000"
+  },
+
+  // Line items: converted values, with the original values kept
+  "line_items": [
+    {
+      "id": "inv_line_01M2SYBFX5G4FEAJ8HM49QXYM2",
+      "display_name": "Token Usage - $0.05/token",
+      "quantity": "100",
+
+      // CONVERTED: rewritten in the billing currency
+      "currency": "inr",
+      "amount": "415.00",
+
+      // NEW: original charge amounts, for the PDF and UI
+      "original_currency": "usd",
+      "original_amount": "5.00"
+    }
+  ],
+
+  // NEW: the customer's billing currency
+  "customer": {
+    "id": "cust_01M2SRRTCNJV103N2GG7M9GH1Z",
+    "name": "Zoho Currency Test Customer",
+    "billing_currency": "inr"
+  }
+}
+```
+
 **Where the frozen rate is visible**
 
 | Surface | Shows |
@@ -775,17 +833,3 @@ Wallet APIs are unchanged. Top-up, balance and transaction endpoints keep their 
 | No rate when a checkout session is created | Session creation fails, naming the pair. Nothing is charged |
 | Rate edited after a payment link is created | No effect. The customer pays the amount shown |
 | Customer deleted after the draft was created | Treated as no billing currency; the invoice finalizes in the charge currency |
-
----
-
-## 11. Migration
-
-| Step | Change | Reversible |
-| --- | --- | --- |
-| 1 | Create `fx_rates` with its two indexes | Yes. Nothing reads it |
-| 2 | Add `customers.billing_currency`, nullable | Yes |
-| 3 | Add `invoices.fx_conversion`, nullable | Yes |
-| 4 | Add `invoice_line_items.original_currency` and `original_amount`, nullable | Yes |
-| 5 | Deploy the code | Nothing changes until a customer gets a billing currency |
-
-All changes are additive, with no backfill. Nullable columns do not rewrite large tables in Postgres.
