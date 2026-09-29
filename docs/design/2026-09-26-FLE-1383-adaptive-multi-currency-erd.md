@@ -605,7 +605,7 @@ flowchart TD
 | Converted checkout draft is frozen | Recompute and manual line edits are rejected, so the paid amount cannot drift from the link (§5.6). Void is allowed | Invoice recompute and line-edit entry points |
 | Conversion checks itself | Lines add up to the net; a non-zero net never converts to zero; an all-zero invoice converts to zeros | Finalize, step 5 |
 | One charge currency per invoice | Grouped invoicing merges child lines with no currency check today. When the invoicing customer has a billing currency, a child in a different currency is billed on its own invoice | Grouped-invoice merge in the billing service |
-| Tax in the billing currency | Tax is recalculated after conversion. Tax rates are percentages found by entity, so nothing converts | Finalize, step 6 |
+| Tax in the billing currency | Tax is recalculated after conversion. Tax rates are percentages found by entity, so nothing converts. For tax rates with no inclusive or exclusive setting, the invoice currency picks the default; after conversion that is the billing currency, which is intended | Finalize, step 6 |
 | One-off invoices follow the billing currency | A USD request for a customer billed in INR produces an INR invoice. A missing rate fails the create call | `CreateInvoice` |
 
 ### 8.5 Wallets, payments and credit notes
