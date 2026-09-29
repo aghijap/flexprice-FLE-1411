@@ -58,6 +58,8 @@ to the ERP in that same currency, so Zoho, QuickBooks and Stripe sync as today. 
 | Billing currency differs from the subscription currency | Invoice converted at finalization | Rate lookup and conversion |
 
 Conversion starts only when someone sets a billing currency that differs from the charge currency.
+The implementation must include a test showing that, for these customers, finalize issues no
+`fx_rates` query and produces an invoice identical to today's.
 
 ---
 
@@ -722,104 +724,7 @@ Wallet APIs are unchanged. Top-up, balance and transaction endpoints keep their 
 
 ---
 
-## 11. Test plan
-
-Extend `invoice_test.go`, `subscription_test.go`, `customer_test.go`, `wallet_test.go` and
-`refund_test.go`. Add `fx_rate_test.go` and `fx_convert_test.go`.
-
-### 11.1 Existing customers
-
-| Case | Expected |
-| --- | --- |
-| No billing currency, invoice finalized | No `fx_rates` query. Invoice identical to today |
-| Billing currency equals charge currency | Same |
-| Every code path touched by this design, no billing currency | No new branch runs |
-| Payment on a draft, no billing currency | Accepted, as today |
-
-### 11.2 Rates and resolution
-
-| Case | Expected |
-| --- | --- |
-| `from == to` | Rate 1, no query |
-| Tenant rate only | Tenant rate used |
-| Tenant and customer rates | Customer rate wins |
-| Tenant, customer and subscription rates | Subscription rate wins |
-| Customer override outside its window | Falls back to the tenant rate |
-| Two customer overrides with back-to-back windows | The one covering now is used |
-| Overlapping override windows | Rejected with 409 |
-| Override with `valid_to` not after `valid_from` | Rejected |
-| Override with no tenant rate for the pair | Rejected |
-| Second tenant rate for the same pair | Rejected with 409 |
-| Only an archived row | Not found |
-| Other environment | Not found |
-| Only the reverse pair exists | Not found; error names the requested direction |
-| One-off invoice, no subscription | Subscription scope skipped |
-| `resolve` and finalize on the same data | Same rate and scope |
-
-### 11.3 Conversion
-
-| Case | Expected |
-| --- | --- |
-| Lines add up exactly | No rounding adjustment |
-| JPY example in §5.3 | Line C absorbs −1; recorded on the invoice |
-| Three-decimal currency (KWD) | Rounded to 3 decimals |
-| Negative line | Absolute size picks the largest line; sign kept |
-| Discounts and prepaid credits | `subtotal − discount − credits = net` after conversion |
-| Line originals | `original_currency` and `original_amount` equal the draft's values |
-| Rate too small for the precision | Error, nothing written |
-
-### 11.4 Invoice lifecycle
-
-| Case | Expected |
-| --- | --- |
-| Billing currency differs, rate exists | Invoice in the billing currency, `fx_conversion` saved, tax in the billing currency |
-| Billing currency differs, no rate | Stays DRAFT, nothing written, not retried by Temporal; finalized once a rate is added |
-| Finalize retried | No second conversion |
-| Checkout session, rate exists | Draft converted and taxed in INR at session creation; link for the INR amount; finalize skips conversion |
-| Checkout session, no rate | Session creation fails, pair named; nothing charged |
-| Rate edited after the link is created | Customer pays the linked amount; invoice keeps the original rate |
-| Converted checkout draft, recompute or line edit | Rejected |
-| Checkout session expires | Draft archived, as today |
-| Checkout paid in full, draft marked finalized by payment processing | Invoice already converted; amounts unchanged |
-| Checkout session created | Checkout payment record is in the billing currency |
-| Worked example in §2 | Wallet −$20 in USD; invoice total ₹8,134.00 |
-| Void of that invoice | $20 back to the USD wallet; paid INR through the refund ledger |
-| USD and EUR subscriptions, INR billing | Two INR invoices, each with its own `fx_conversion` |
-| Custom-currency subscription, INR billing, `mac` has an `inr` factor | Draft and invoice in INR; `mac → inr` frozen; no FX, no `fx_conversion` |
-| Custom-currency subscription, no billing currency | Invoice in the tenant default fiat, as today |
-| Rate edited between compute and finalize | Draft uses the new rate; finalized invoices unchanged |
-
-### 11.5 Guardrails
-
-| Case | Expected |
-| --- | --- |
-| Subscription create, no rate | Rejected, pair named |
-| Same with `fx_rate` in the request | Created with a subscription-scope rate |
-| Set billing currency, a subscription has no rate | Rejected, missing pairs listed |
-| Set billing currency, a wallet has no rate | Rejected, missing pairs listed |
-| Payment on an unconverted draft, billing currency differs | Rejected |
-| One-off invoice created as paid, billing currency differs | Rejected |
-| Delete the only rate a subscription needs | 409 listing the subscription |
-| Custom-currency subscription, billing currency without a factor | Rejected |
-| Set a billing currency that a custom-currency subscription has no factor for | Rejected |
-| FX rate with a custom currency code | Rejected |
-| Change billing currency while a checkout session is open | Rejected; allowed again after the session completes or expires |
-
-### 11.6 Wallets and credit notes
-
-| Case | Expected |
-| --- | --- |
-| Customer billed in INR buys $300 for a USD wallet, rate 100 | ₹30,000 invoice; wallet +$300 after payment |
-| Same, pay-first checkout | Payment link for ₹30,000; wallet +$300 after payment |
-| Same, no rate | Top-up invoice cannot finalize; wallet unchanged |
-| Adjustment credit note | INR, limit checked in INR |
-| Refund `BACK_TO_SOURCE` on a ₹8,300 invoice | One INR gateway refund; no rate used |
-| Refund `PREPAID_WALLET` on a converted invoice | Rejected |
-| Credit note line with `source_amount: 50`, frozen rate 83 | Saved as ₹4,150 even if the live rate is now 85 |
-
----
-
-## 12. Migration
+## 11. Migration
 
 | Step | Change | Reversible |
 | --- | --- | --- |
