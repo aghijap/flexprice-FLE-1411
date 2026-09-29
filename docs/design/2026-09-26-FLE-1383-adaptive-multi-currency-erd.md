@@ -560,13 +560,13 @@ All checks run in the service layer. Errors name the currency pair and the IDs i
 
 ```mermaid
 flowchart TD
-    A["Set billing_currency = X"] --> V{"valid fiat currency?"}
-    V -- no --> R1["400"]
-    V -- yes --> N{"X is null?"}
-    N -- yes --> OK["Save. Invoices follow the charge currency"]
-    N -- no --> OC{"open checkout session<br/>for this customer?"}
+    A["Set billing_currency = X"] --> OC{"open checkout session<br/>for this customer?"}
     OC -- yes --> R0["400: complete or cancel the open checkout first"]
-    OC -- no --> S{"rate or custom factor exists for every active,<br/>trialing or paused subscription with currency ≠ X?"}
+    OC -- no --> N{"X is null?"}
+    N -- yes --> OK["Save. Invoices follow the charge currency"]
+    N -- no --> V{"valid fiat currency?"}
+    V -- no --> R1["400: invalid currency"]
+    V -- yes --> S{"rate or custom factor exists for every active,<br/>trialing or paused subscription with currency ≠ X?"}
     S -- no --> R2["400 listing the missing pairs"]
     S -- yes --> W{"rate or custom factor exists for every wallet<br/>with currency ≠ X?"}
     W -- no --> R3["400 listing the missing pairs"]
