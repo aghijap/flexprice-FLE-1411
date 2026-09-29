@@ -507,59 +507,69 @@ conversion cannot change them.
 
 ### 6.3 Void
 
-Voiding a converted invoice returns two amounts separately:
+Void returns the full **funded value** to the customer's prepaid wallet. It never refunds to a gateway
+and never returns money to a postpaid wallet:
 
-- The paid part goes back in INR through the refund ledger, as today.
-- The prepaid credits go back to the USD wallet using `fx_conversion.source.total_prepaid_credits_applied`,
-  never the INR amount divided by the rate.
+`funded = amount_paid + total_prepaid_credits_applied − refunded_amount` (`invoice.go`).
 
-Today both go back as one amount in the invoice currency. This is the only change in the void path.
+Only the prepaid-credits part is FX-sensitive: it was spent in the charge currency, while the cash was
+paid in the billing currency. So void returns each part in the currency it came from:
+
+| How the invoice was settled | Void returns | Currency | Goes to |
+| --- | --- | --- | --- |
+| Prepaid wallet | The credits, from `fx_conversion.source.total_prepaid_credits_applied` | Charge (USD) | The USD prepaid wallet |
+| Postpaid wallet | The cash it paid | Billing (INR) | A prepaid wallet (INR) |
+| Cash or gateway | The cash it paid | Billing (INR) | A prepaid wallet (INR), never back to the card |
+
+A mixed invoice does both: the cash part in INR and the credits part in USD.
+
+The cash parts are already in the billing currency, so they are unchanged from today. The one change is
+the credits part: today it is lumped with the cash and returned in the invoice currency (INR), which
+would strand a USD balance in an INR wallet; now it goes back to the USD wallet in USD, never the INR
+amount divided by the rate. This is the only change to the void path.
+
+**Voiding a paid invoice is a full refund to the wallet.** A `SUCCEEDED` invoice can be voided; doing
+so returns the whole funded value, so the customer gets their money back as wallet credit (never to the
+card) and the invoice ends `REFUNDED`. Void eligibility is unchanged from today: any invoice that is
+`DRAFT`, `FINALIZED` or `SKIPPED`, with a payment status other than `PROCESSING` or `REFUNDED`, and not
+gated on another caller's checkout session.
+
+**Accounting.**
+
+- The split applies only to a converted invoice (`fx_conversion` set). A non-converted invoice, any
+  draft included, follows today's single-currency void untouched.
+- `refunded_amount` is an INR field on the invoice. On void it increases only by the INR **cash**
+  returned. The USD credits leg is recorded on the USD wallet transaction, not folded into
+  `refunded_amount`, which would mix currencies.
+- Prior refunds (from refund credit notes, §7) are always cash, so they reduce only the cash leg. The
+  credits leg always returns in full, from `fx_conversion.source.total_prepaid_credits_applied`.
 
 ---
 
 ## 7. Credit notes and refunds
 
-A credit note is always in its invoice's currency, so credit notes on a converted invoice are INR and
-today's limits apply in INR. No new columns on `credit_notes`, `credit_note_line_items` or `refunds`,
-and no rate is used.
+Credit notes are unchanged by this design. A credit note is always issued in its invoice's currency, so
+on a converted invoice it is INR, and today's amounts, limits and refund behaviour all apply in INR
+with no rate. No new columns on `credit_notes`, `credit_note_line_items` or `refunds`.
 
-**A credit note refunds only the cash the customer paid.** The refund limit is `amount_paid`, which on
-a converted invoice is INR. The prepaid credits applied before conversion (§6.1) were in the charge
-currency and are not refundable through a credit note; they were consumed to reduce the bill. The path
-that returns applied credits to a wallet is void (§6.3), not a credit note.
-
-So both refund targets stay in the billing currency and need no rate:
+- **The refundable amount is the cash the customer paid** (`amount_paid`), exactly as today. On a
+  converted invoice that cash is INR. The prepaid credits applied before conversion (§6.1) are not
+  refundable through a credit note; returning those is void's job (§6.3).
+- **A refund goes back the way the cash came in, in INR**, with no FX-specific routing: `BACK_TO_SOURCE`
+  refunds the INR gateway payment, and a failed gateway refund falls back to an INR wallet, as today.
 
 ```mermaid
 flowchart TD
     CN["Credit note on a converted invoice<br/>currency = INR"] --> T{"type"}
     T -- ADJUSTMENT --> ADJ["amount_due reduced in INR"]
-    T -- REFUND --> RT{"refund target"}
-    RT -- BACK_TO_SOURCE --> GW["Gateway refunds the INR payment"]
-    RT -- PREPAID_WALLET --> WAL["Tops up a prepaid wallet in the<br/>invoice currency (INR) with the refunded INR"]
-    GW -- "gateway refund fails" --> WAL
+    T -- REFUND --> GW["Gateway refunds the INR cash payment"]
+    GW -- "gateway refund fails" --> FB["Falls back to an INR wallet, as today"]
 ```
 
 | Path | Result |
 | --- | --- |
 | Adjustment credit note | Reduces `amount_due` in INR |
-| Refund, `BACK_TO_SOURCE` | Gateway refunds the INR payment |
-| Refund, `PREPAID_WALLET` | Tops up a prepaid wallet in the invoice currency (INR). No rate used |
-| Gateway refund fails | Falls back to an INR wallet, as today |
-
-**Why the wallet is topped up in INR, not the USD wallet that paid the credits.** A credit note refunds
-the cash the customer paid, not the credits the wallet spent. Take the worked example: the USD wallet
-spent $50 before conversion, and the customer paid ₹5,000 cash. The $50 is not in `total` or
-`amount_paid` (`total = subtotal − prepaid credits`), so a credit note cannot touch it. Its limit is
-the ₹5,000 cash. `PREPAID_WALLET` only chooses where that cash lands — gateway or wallet — and the cash
-is INR, so `EnsurePrepaidWallet` opens or reuses an **INR** wallet and tops it up in INR. No rate, no
-conversion. Topping up the USD wallet would mean converting ₹ back to $, which breaks "wallets are
-never converted"; it also makes no sense for a partial refund, since ₹2,500 back has no relation to the
-$50 of credits. This needs no new code; the refund path already keys the wallet on the refund currency.
-
-**Returning the credits the wallet spent is a different operation — void (§6.3).** Void puts the $50
-back in the USD wallet from `fx_conversion.source`, in the charge currency, and returns the cash
-separately in INR. A credit note never does this.
+| Refund | Refunds the INR cash the customer paid; on gateway failure, an INR wallet, as today |
 
 ---
 
@@ -653,8 +663,7 @@ flowchart TD
 | Wallets can be created in any currency | No new restriction | `CreateWallet` |
 | Postpaid wallets pay only matching invoices | A postpaid wallet pays an invoice only when their currencies match | `GetWalletsForPayment` |
 | Payment currency equals invoice currency | As today | Payment service, existing checks |
-| Credit notes are in the invoice currency | As today | Credit note service, existing |
-| Refund to a prepaid wallet stays in the invoice currency | A `PREPAID_WALLET` refund on a converted invoice tops up an INR wallet and uses no rate (§7) | `PrepareRefundsForCreditNote` |
+| Credit notes are in the invoice currency | As today. Refundable amount is the cash paid; no rate, no FX-specific routing (§7) | Credit note service, existing |
 
 ---
 
