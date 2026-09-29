@@ -32,14 +32,6 @@ configured. The rate is saved on the invoice and never changes after that.
 - Changing a finalized invoice.
 - Changing a subscription's currency.
 
-**Not in this version.** The PRD mentions these, but they will come later:
-
-- Refunding a converted invoice into the customer's prepaid wallet. For now, refunds go back to the
-  original payment method.
-- Paying back unused wallet credits as money.
-- Moving a prepaid wallet balance into a postpaid wallet in another currency.
-- Showing a wallet balance in the customer's billing currency.
-
 **Integrations are unchanged.** The invoice is issued in the billing currency and the customer syncs
 to the ERP in that same currency, so Zoho, QuickBooks and Stripe sync as today. No FX rate is sent.
 
