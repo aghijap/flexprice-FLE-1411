@@ -338,10 +338,8 @@ are new.
 **Why this order.** Credits and discounts come first, so only the remainder crosses the rate. Tax
 comes after, so an INR invoice carries INR tax, as GST and the ERPs require.
 
-**Checkout (pay-first) drafts.** The customer pays before finalization, so steps 4 and 5 run when the
-checkout session is created. The payment link shows the INR amount, and finalization skips
-conversion because `fx_conversion` is already set. The converted draft cannot be recomputed after
-that.
+**Checkout (pay-first) drafts.** The customer pays before finalization, so steps 4 to 6 run earlier,
+when the checkout session is created. See §5.6.
 
 **Retries.** `fx_conversion` is saved in the same transaction as the amounts, and step 4 skips it
 when set, so a retried finalize never converts twice.
@@ -411,6 +409,54 @@ there is only ever one conversion.
 The only code change: when the customer has a billing currency, the draft uses it as the fiat
 currency instead of the tenant default. Finalization already freezes the factor for the invoice's own
 currency. Top-ups of a custom-currency wallet follow the same rule.
+
+### 5.6 Pay-first checkout
+
+Checkout-gated flows take payment on a DRAFT invoice and finalize it only after the payment succeeds:
+subscription create, addon attach, quantity change and wallet top-up. The customer must see the
+final amount in the billing currency before paying, so conversion and tax run when the checkout
+session is created, not at finalize.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant API as Checkout session
+    participant Inv as Invoice (draft)
+    participant FX as Rate resolver
+    participant GW as Payment gateway
+    API->>Inv: Create and compute the draft in the charge currency (existing)
+    API->>FX: Resolve rate (charge → billing)
+    alt Rate not found
+        FX-->>API: Session creation fails, naming the pair. Nothing charged
+    else Rate found
+        API->>Inv: Convert, save fx_conversion
+        API->>Inv: Calculate tax in the billing currency
+        API->>GW: Payment link for the INR amount due
+        GW-->>API: Customer pays in INR
+        API->>Inv: Finalize. fx_conversion is set, so conversion is skipped
+    end
+```
+
+| Step | What happens | Currency |
+| --- | --- | --- |
+| Session created | Draft created and computed, as today | Charge (USD) |
+| Same moment | Rate resolved, draft converted, `fx_conversion` saved | USD → INR |
+| Same moment | Tax calculated on the converted amounts | INR |
+| Payment link | Created for the INR `amount_due`, which is now locked | INR |
+| Customer pays | Payment currency matches the invoice. The draft is already converted, so the "no payment before conversion" rule (§8.4) lets it through | INR |
+| Completion | Finalize skips conversion because `fx_conversion` is set. Amounts do not change | INR |
+| Session expires or fails | Draft archived, as today. Nothing extra to undo | — |
+
+- **The rate is fixed when the customer sees the price.** A rate edit after the link is created has no
+  effect on that invoice.
+- **The converted draft is frozen.** Recompute and manual line edits are rejected (§8.4).
+- **Both finalize paths are safe.** Checkout completion finalizes the invoice, and payment processing
+  can also mark a fully paid draft as finalized directly. Either way the draft was already converted.
+- **Subscription create checks first.** The rate check in §8.3 runs before the session opens.
+- **Wallet top-ups.** The INR link pays for the USD credits; the wallet receives them on completion
+  (§6.2).
+- **Custom currency.** The draft is already in the billing currency through the custom factor (§5.5),
+  so there is no FX step.
 
 ---
 
@@ -555,7 +601,7 @@ flowchart TD
 | No rate means no finalize | The invoice stays DRAFT and nothing is written. Never a rate of 1, never a guess. Logged at `Error`. Marked as an invalid-operation error, so Temporal does not retry it. The scheduled finalizer picks the draft up once a rate exists | Finalize, step 4 |
 | Convert once | Skipped when `fx_conversion` is already set | Finalize, step 4 |
 | No payment before conversion | A payment on an unconverted draft is rejected when the customer's billing currency differs: "Finalize the invoice first; it will be issued in INR." Same for a one-off invoice created as already paid. Today payments on drafts are allowed | `CreateInvoice`, `validateInvoicePaymentEligibility` |
-| Converted checkout draft is frozen | Recompute and manual line edits are rejected. Void is allowed | Invoice recompute and line-edit entry points |
+| Converted checkout draft is frozen | Recompute and manual line edits are rejected, so the paid amount cannot drift from the link (§5.6). Void is allowed | Invoice recompute and line-edit entry points |
 | Conversion checks itself | Lines add up to the net; a non-zero net never converts to zero; an all-zero invoice converts to zeros | Finalize, step 5 |
 | One charge currency per invoice | Grouped invoicing merges child lines with no currency check today. When the invoicing customer has a billing currency, a child in a different currency is billed on its own invoice | Grouped-invoice merge in the billing service |
 | Tax in the billing currency | Tax is recalculated after conversion. Tax rates are percentages found by entity, so nothing converts | Finalize, step 6 |
@@ -626,7 +672,7 @@ Deleting a customer or subscription archives its scoped rates.
 
 | Case | Status | Message names |
 | --- | --- | --- |
-| No rate for a pair (`resolve`, subscription create, one-off invoice) | 404 / 400 | The pair and every scope checked |
+| No rate for a pair (`resolve`, subscription create, one-off invoice, checkout session) | 404 / 400 | The pair and every scope checked |
 | Setting a billing currency with missing rates | 400 | Every missing pair, with the subscription or wallet id |
 | Second tenant rate for a pair, or overlapping override windows | 409 | The existing rate id |
 | Deleting a rate that is still needed | 409 | Up to 20 dependent subscriptions or drafts |
@@ -644,6 +690,8 @@ Deleting a customer or subscription archives its scoped rates.
 | Rate edited while a draft is open | The draft uses the rate valid at its finalize. Checkout drafts keep the rate shown to the customer |
 | Rate edited after finalize | No effect. The invoice keeps its frozen rate |
 | Finalize retried after conversion | Conversion skipped |
+| No rate when a checkout session is created | Session creation fails, naming the pair. Nothing is charged |
+| Rate edited after a payment link is created | No effect. The customer pays the amount shown |
 | Customer deleted after the draft was created | Treated as no billing currency; the invoice finalizes in the charge currency |
 
 ---
@@ -700,7 +748,12 @@ Extend `invoice_test.go`, `subscription_test.go`, `customer_test.go`, `wallet_te
 | Billing currency differs, rate exists | Invoice in the billing currency, `fx_conversion` saved, tax in the billing currency |
 | Billing currency differs, no rate | Stays DRAFT, nothing written, not retried by Temporal; finalized once a rate is added |
 | Finalize retried | No second conversion |
-| Checkout draft | Converted at session creation; finalize reuses it; recompute rejected |
+| Checkout session, rate exists | Draft converted and taxed in INR at session creation; link for the INR amount; finalize skips conversion |
+| Checkout session, no rate | Session creation fails, pair named; nothing charged |
+| Rate edited after the link is created | Customer pays the linked amount; invoice keeps the original rate |
+| Converted checkout draft, recompute or line edit | Rejected |
+| Checkout session expires | Draft archived, as today |
+| Checkout paid in full, draft marked finalized by payment processing | Invoice already converted; amounts unchanged |
 | Worked example in §2 | Wallet −$20 in USD; invoice total ₹8,134.00 |
 | Void of that invoice | $20 back to the USD wallet; paid INR through the refund ledger |
 | USD and EUR subscriptions, INR billing | Two INR invoices, each with its own `fx_conversion` |
