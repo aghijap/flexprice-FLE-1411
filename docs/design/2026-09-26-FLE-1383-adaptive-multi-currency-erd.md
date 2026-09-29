@@ -540,7 +540,7 @@ All checks run in the service layer. Errors name the currency pair and the IDs i
 
 | Rule | Detail | Enforced in |
 | --- | --- | --- |
-| Valid input | `from ≠ to`, `rate > 0`, valid codes. Custom currency codes are not allowed on either side; they convert through the custom currency config (§5.5). For subscription scope, the subscription's currency must equal `from` | `FXRateService.Create` |
+| Valid input | `from ≠ to`, `rate > 0`, valid codes. Custom currency codes are not allowed on either side; they convert through the custom currency config (§5.5). For subscription scope, the subscription's currency must equal `from`. When both `valid_from` and `valid_to` are set, `valid_from` must be earlier | `FXRateService.Create`, `FXRateService.Update` |
 | One tenant rate per pair | A second tenant rate for the same pair returns `409`. Update the existing one instead | Unique index, plus a pre-check for a clear error |
 | Override needs a tenant rate | A customer or subscription rate is rejected if no tenant rate exists for the pair | `FXRateService.Create` |
 | No overlapping override windows | Checked on create and update. A missing `valid_from` counts as the beginning of time and a missing `valid_to` as the end. Overlap returns `409` | `FXRateService.Create`, `FXRateService.Update` |
@@ -721,6 +721,7 @@ Extend `invoice_test.go`, `subscription_test.go`, `customer_test.go`, `wallet_te
 | Customer override outside its window | Falls back to the tenant rate |
 | Two customer overrides with back-to-back windows | The one covering now is used |
 | Overlapping override windows | Rejected with 409 |
+| Override with `valid_to` not after `valid_from` | Rejected |
 | Override with no tenant rate for the pair | Rejected |
 | Second tenant rate for the same pair | Rejected with 409 |
 | Only an archived row | Not found |
