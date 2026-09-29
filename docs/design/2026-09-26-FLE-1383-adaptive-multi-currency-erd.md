@@ -34,7 +34,7 @@ configured. The rate is saved on the invoice and never changes after that.
 
 **Deferred from the PRD.** Refund credit notes into a prepaid wallet on a converted invoice, cash
 refund of unused credits at the purchase rate, moving a prepaid balance into a postpaid wallet, and
-showing a wallet balance in the billing currency. See open question 2.
+showing a wallet balance in the billing currency.
 
 **Integrations are unchanged.** The invoice is issued in the billing currency and the customer syncs
 to the ERP in that same currency, so Zoho, QuickBooks and Stripe sync as today. No FX rate is sent.
@@ -58,8 +58,6 @@ to the ERP in that same currency, so Zoho, QuickBooks and Stripe sync as today. 
 | Billing currency differs from the subscription currency | Invoice converted at finalization | Rate lookup and conversion |
 
 Conversion starts only when someone sets a billing currency that differs from the charge currency.
-Appendix A lists every code path this design touches and what each does when no billing currency is
-set.
 
 ---
 
@@ -296,7 +294,6 @@ flowchart TD
 - A window covers `now` when `valid_from` is NULL or not after `now`, and `valid_to` is NULL or after
   `now`.
 - Resolution always uses the current time. `fx_conversion.converted_at` records when it happened.
-  See open question 1.
 - At most three indexed lookups. No cache.
 - A `usd → inr` rate is never used for `inr → usd`, and a missing rate is never treated as 1.
 - `GET /v1/fx-rates/resolve` calls the same function, so a preview always matches the invoice.
@@ -476,7 +473,7 @@ flowchart TD
 | --- | --- |
 | Adjustment credit note | Reduces `amount_due` in INR |
 | Refund, `BACK_TO_SOURCE` | Gateway refunds the INR payment |
-| Refund, `PREPAID_WALLET` | Rejected on converted invoices. Deferred, see open question 2 |
+| Refund, `PREPAID_WALLET` | Rejected on converted invoices. Deferred |
 | Gateway refund fails | Falls back to an INR wallet, as today |
 
 **Credit note from a USD amount.** Support may think "refund one month, $100". A credit note line can
@@ -556,7 +553,7 @@ flowchart TD
 
 | Rule | Detail |
 | --- | --- |
-| Wallets can be created in any currency | No new restriction. See open question 3 |
+| Wallets can be created in any currency | No new restriction |
 | Postpaid wallets pay only matching invoices | A postpaid wallet pays an invoice only when their currencies match |
 | Payment currency equals invoice currency | As today |
 | Credit notes are in the invoice currency | As today |
@@ -649,7 +646,7 @@ Extend `invoice_test.go`, `subscription_test.go`, `customer_test.go`, `wallet_te
 | --- | --- |
 | No billing currency, invoice finalized | No `fx_rates` query. Invoice identical to today |
 | Billing currency equals charge currency | Same |
-| Every path in Appendix A, no billing currency | No new branch runs |
+| Every code path touched by this design, no billing currency | No new branch runs |
 | Payment on a draft, no billing currency | Accepted, as today |
 
 ### 11.2 Rates and resolution
@@ -723,9 +720,7 @@ Extend `invoice_test.go`, `subscription_test.go`, `customer_test.go`, `wallet_te
 
 ---
 
-## 12. Rollout
-
-### 12.1 Migration
+## 12. Migration
 
 | Step | Change | Reversible |
 | --- | --- | --- |
@@ -736,78 +731,3 @@ Extend `invoice_test.go`, `subscription_test.go`, `customer_test.go`, `wallet_te
 | 5 | Deploy the code | Nothing changes until a customer gets a billing currency |
 
 All changes are additive, with no backfill. Nullable columns do not rewrite large tables in Postgres.
-
-### 12.2 PR order
-
-1. Schema, types and repositories, with round-trip tests. No behaviour change.
-2. FX rate service and API, with the §8.1 rules.
-3. Customer billing currency, with the §8.2 checks.
-4. Conversion in finalize, tax for converted invoices, and the draft estimate. **This is the release.**
-5. Subscription create check and inline rate.
-6. Checkout drafts.
-7. Void split and the refund-to-wallet block.
-8. PDF and portal.
-9. Swagger, SDKs and dashboard.
-
-PRs 1 to 3 can reach production first. They change nothing on their own and let tenants set up rates
-before conversion is switched on.
-
----
-
-## 13. Open questions
-
-1. **Which date picks a time-limited rate?** Resolution uses the finalize time. An October invoice
-   finalized on 1 November would use a November-only override. Should resolution use the invoice's
-   period end instead?
-2. **Deferred PRD scope.** The PRD expects refunds into a prepaid wallet on converted invoices (at the
-   rate at refund time), cash refunds of unused credits at the purchase rate, prepaid to postpaid
-   moves, and wallet balances shown in the billing currency. This design defers all four. Confirm
-   with product that launch does not need them.
-3. **Postpaid wallets in another currency.** Wallet creation is unrestricted, so a postpaid wallet
-   not in the billing currency can never pay that customer's invoices. Reject it at creation, or
-   allow it on purpose?
-4. **Deleting a tenant rate that overrides depend on.** Overrides require a tenant rate at creation.
-   Should deleting the tenant rate be blocked while overrides for the pair exist?
-
----
-
-## Appendix A — Code paths touched
-
-Every path below behaves exactly as today for a customer with no billing currency.
-
-| Path | New behaviour runs when |
-| --- | --- |
-| `performFinalizeInvoiceActions` | Billing currency is set and differs from the draft currency |
-| `RecalculateTaxesOnInvoice` | The invoice has `fx_conversion` |
-| `CreateComputedDraftInvoice` (checkout) | Billing currency differs from the draft currency |
-| `CreateInvoice` (one-off) | Billing currency differs from the request currency |
-| `validateInvoicePaymentEligibility` | Draft not yet converted and billing currency differs |
-| `createSubscription`, checkout create | Invoicing customer's billing currency differs from the subscription currency |
-| `CustomerService.Create/Update` | Request contains `billing_currency` |
-| Void | The invoice has `fx_conversion` |
-| `FinalizeCreditNote`, wallet target | The invoice has `fx_conversion` |
-| Grouped-invoice merge | Invoicing customer has a billing currency |
-| Invoice, customer, subscription responses | Always, but new fields are null |
-
-## Appendix B — Codebase anchors
-
-| Topic | Location |
-| --- | --- |
-| Finalize | [`performFinalizeInvoiceActions`, invoice.go:1057](../../internal/ee/service/invoice.go#L1057) |
-| Prepaid credits at finalize | [invoice.go:1121](../../internal/ee/service/invoice.go#L1121); [`ApplyCreditsToInvoice`, credit_adjustment.go:207](../../internal/ee/service/credit_adjustment.go#L207) |
-| One-off credits and coupons | [`applyCreditsAndCouponsToInvoice`, invoice.go:4877](../../internal/ee/service/invoice.go#L4877) |
-| Draft creation | [`CreateEmptyDraftInvoice`, invoice.go:185](../../internal/ee/service/invoice.go#L185); [`CreateDraftInvoiceForSubscription`, invoice.go:411](../../internal/ee/service/invoice.go#L411) |
-| Checkout drafts | [`CreateComputedDraftInvoice`, invoice.go:391](../../internal/ee/service/invoice.go#L391) |
-| Wallet top-up invoice | [wallet.go:1158](../../internal/ee/service/wallet.go#L1158) |
-| Postpaid wallet payments | [`GetWalletsForPayment`, wallet_payment.go:124](../../internal/ee/service/wallet_payment.go#L124) |
-| Payment currency checks | [payment.go:228](../../internal/ee/service/payment.go#L228); [payment_processor.go:641](../../internal/ee/service/payment_processor.go#L641), [:739](../../internal/ee/service/payment_processor.go#L739) |
-| Void refund amount | [invoice.go:1444](../../internal/ee/service/invoice.go#L1444); [`PrepareRefundsForVoidedInvoice`, refund.go:84](../../internal/ee/service/refund.go#L84) |
-| Refunds to wallet or source | [refund.go:286](../../internal/ee/service/refund.go#L286) |
-| Subscription create checks | [`createSubscription`, subscription.go:74](../../internal/ee/service/subscription.go#L74) |
-| Grouped invoicing merge | [billing.go:1870](../../internal/ee/service/billing.go#L1870) |
-| Tax rates for invoices | [`PrepareTaxRatesForInvoice`, tax.go:972](../../internal/ee/service/tax.go#L972) |
-| Temporal finalize retry policy | [invoice_activities.go:163](../../internal/temporal/activities/invoice/invoice_activities.go#L163) |
-| Invoice webhook payload | [payload/invoice.go:27](../../internal/webhook/payload/invoice.go#L27) |
-| PDF data | [domain/pdf/model.go:11](../../internal/domain/pdf/model.go#L11) |
-| Router pattern | [router.go:527](../../internal/api/router.go#L527) |
-| Custom currency | [design](2026-08-27-FLE-1201-tenant-custom-currency.md); [`custom_currency.go`](../../internal/types/custom_currency.go) |
