@@ -233,9 +233,12 @@ to a parent, the parent's billing currency applies.
 | `tenant` | `tenant` | usd → inr | 83.00 | — | — | Default for every customer |
 | `tenant` | `tenant` | eur → inr | 89.50 | — | — | Default for EUR |
 | `customer` | `cust_acme` | usd → inr | 84.50 | — | — | Acme always gets 84.50 |
-| `customer` | `cust_globex` | usd → inr | 85.00 | 2026-11-01 | 2026-12-01 | Globex gets 85 in November only |
-| `customer` | `cust_globex` | usd → inr | 86.00 | 2026-12-01 | — | Globex gets 86 from December onward |
-| `subscription` | `subs_pro` | usd → inr | 82.00 | — | 2026-11-01 | This subscription gets 82 until November |
+| `customer` | `cust_globex` | usd → inr | 85.00 | 2026-11-01 | 2026-12-01 | Globex: conversions run during November use 85 |
+| `customer` | `cust_globex` | usd → inr | 86.00 | 2026-12-01 | — | Globex: conversions run from December use 86 |
+| `subscription` | `subs_pro` | usd → inr | 82.00 | — | 2026-11-01 | This subscription: conversions run before November use 82 |
+
+The window is matched against the moment conversion runs, not the invoice's billing period (§4). A
+November-usage invoice finalized on 1 December is converted at 86, not 85.
 
 ### 3.5 `invoices.fx_conversion`
 
@@ -293,7 +296,10 @@ flowchart TD
 - The most specific scope wins: subscription, then customer, then tenant.
 - A window covers `now` when `valid_from` is NULL or not after `now`, and `valid_to` is NULL or after
   `now`.
-- Resolution always uses the current time. `fx_conversion.converted_at` records when it happened.
+- `now` is the moment conversion runs — invoice finalize time, or checkout-session creation for
+  pay-first (§5.6) — never the invoice's billing period. A window is matched against that moment, so a
+  November-usage invoice finalized in December uses December's rate. `fx_conversion.converted_at`
+  records it.
 - At most three indexed lookups. No cache.
 - A `usd → inr` rate is never used for `inr → usd`, and a missing rate is never treated as 1.
 - `GET /v1/fx-rates/resolve` calls the same function, so a preview always matches the invoice.
@@ -517,26 +523,43 @@ A credit note is always in its invoice's currency, so credit notes on a converte
 today's limits apply in INR. No new columns on `credit_notes`, `credit_note_line_items` or `refunds`,
 and no rate is used.
 
+**A credit note refunds only the cash the customer paid.** The refund limit is `amount_paid`, which on
+a converted invoice is INR. The prepaid credits applied before conversion (§6.1) were in the charge
+currency and are not refundable through a credit note; they were consumed to reduce the bill. The path
+that returns applied credits to a wallet is void (§6.3), not a credit note.
+
+So both refund targets stay in the billing currency and need no rate:
+
 ```mermaid
 flowchart TD
     CN["Credit note on a converted invoice<br/>currency = INR"] --> T{"type"}
     T -- ADJUSTMENT --> ADJ["amount_due reduced in INR"]
     T -- REFUND --> RT{"refund target"}
-    RT -- BACK_TO_SOURCE --> GW["Gateway refunds INR"]
-    RT -- PREPAID_WALLET --> REJ["Rejected: use BACK_TO_SOURCE"]
-    GW -- "gateway refund fails" --> FB["Falls back to an INR wallet, as today"]
+    RT -- BACK_TO_SOURCE --> GW["Gateway refunds the INR payment"]
+    RT -- PREPAID_WALLET --> WAL["Tops up a prepaid wallet in the<br/>invoice currency (INR) with the refunded INR"]
+    GW -- "gateway refund fails" --> WAL
 ```
 
 | Path | Result |
 | --- | --- |
 | Adjustment credit note | Reduces `amount_due` in INR |
 | Refund, `BACK_TO_SOURCE` | Gateway refunds the INR payment |
-| Refund, `PREPAID_WALLET` | Rejected on converted invoices. Deferred |
+| Refund, `PREPAID_WALLET` | Tops up a prepaid wallet in the invoice currency (INR). No rate used |
 | Gateway refund fails | Falls back to an INR wallet, as today |
 
-**Credit note from a USD amount.** Support may think "refund one month, $100". A credit note line can
-take an optional `source_amount`. It is converted at the invoice's frozen rate, never a new rate, and
-checked against the existing per-line limit.
+**Why the wallet is topped up in INR, not the USD wallet that paid the credits.** A credit note refunds
+the cash the customer paid, not the credits the wallet spent. Take the worked example: the USD wallet
+spent $50 before conversion, and the customer paid ₹5,000 cash. The $50 is not in `total` or
+`amount_paid` (`total = subtotal − prepaid credits`), so a credit note cannot touch it. Its limit is
+the ₹5,000 cash. `PREPAID_WALLET` only chooses where that cash lands — gateway or wallet — and the cash
+is INR, so `EnsurePrepaidWallet` opens or reuses an **INR** wallet and tops it up in INR. No rate, no
+conversion. Topping up the USD wallet would mean converting ₹ back to $, which breaks "wallets are
+never converted"; it also makes no sense for a partial refund, since ₹2,500 back has no relation to the
+$50 of credits. This needs no new code; the refund path already keys the wallet on the refund currency.
+
+**Returning the credits the wallet spent is a different operation — void (§6.3).** Void puts the $50
+back in the USD wallet from `fx_conversion.source`, in the charge currency, and returns the cash
+separately in INR. A credit note never does this.
 
 ---
 
@@ -631,7 +654,7 @@ flowchart TD
 | Postpaid wallets pay only matching invoices | A postpaid wallet pays an invoice only when their currencies match | `GetWalletsForPayment` |
 | Payment currency equals invoice currency | As today | Payment service, existing checks |
 | Credit notes are in the invoice currency | As today | Credit note service, existing |
-| No refund to a prepaid wallet on a converted invoice | Use `BACK_TO_SOURCE` (§7) | `FinalizeCreditNote` |
+| Refund to a prepaid wallet stays in the invoice currency | A `PREPAID_WALLET` refund on a converted invoice tops up an INR wallet and uses no rate (§7) | `PrepareRefundsForCreditNote` |
 
 ---
 
@@ -760,17 +783,17 @@ Wallet APIs are unchanged. Top-up, balance and transaction endpoints keep their 
   "fx_conversion": {
     "charge_currency": "usd",
     "billing_currency": "inr",
-    "rate": "83.000000000000",
-    "rate_id": "fxr_tnt_001",
+    "rate": "83.00",
+    "rate_id": "fxr_01J8Z9K3M4N5P6Q7R8S9T0V1W2",
     "scope": "tenant",
     "converted_at": "2026-09-18T09:42:53Z",
     "source": {
-      "subtotal": "5.00000000",
-      "total_discount": "0.00000000",
-      "total_prepaid_credits_applied": "0.00000000",
-      "net": "5.00000000"
+      "subtotal": "5.00",
+      "total_discount": "0.00",
+      "total_prepaid_credits_applied": "0.00",
+      "net": "5.00"
     },
-    "rounding_adjustment": "0.00000000"
+    "rounding_adjustment": "0.00"
   },
 
   // Line items: converted values, with the original values kept
@@ -793,7 +816,7 @@ Wallet APIs are unchanged. Top-up, balance and transaction endpoints keep their 
   // NEW: the customer's billing currency
   "customer": {
     "id": "cust_01M2SRRTCNJV103N2GG7M9GH1Z",
-    "name": "Zoho Currency Test Customer",
+    "name": "Acme",
     "billing_currency": "inr"
   }
 }
