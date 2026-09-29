@@ -442,17 +442,25 @@ sequenceDiagram
 | Session created | Draft created and computed, as today | Charge (USD) |
 | Same moment | Rate resolved, draft converted, `fx_conversion` saved | USD → INR |
 | Same moment | Tax calculated on the converted amounts | INR |
-| Payment link | Created for the INR `amount_due`, which is now locked | INR |
-| Customer pays | Payment currency matches the invoice. The draft is already converted, so the "no payment before conversion" rule (§8.4) lets it through | INR |
+| Payment link | Created for the INR `amount_due`, which is now locked. The checkout payment record copies the invoice currency, so it is INR | INR |
+| Customer pays | Payment currency matches the invoice | INR |
 | Completion | Finalize skips conversion because `fx_conversion` is set. Amounts do not change | INR |
 | Session expires or fails | Draft archived, as today. Nothing extra to undo | — |
 
+- **Order matters.** Conversion must run before the checkout payment record is created, because that
+  record copies the invoice currency. Created earlier, the payment would be in USD against an INR
+  invoice, and payment processing would reject it after the gateway had already taken the money.
+- **Not blocked by the draft-payment rule.** Checkout payments are created through their own path
+  (`CreatePaymentForCheckout`), not the one that enforces "no payment before conversion" (§8.4), and
+  the draft is already converted anyway.
 - **The rate is fixed when the customer sees the price.** A rate edit after the link is created has no
   effect on that invoice.
 - **The converted draft is frozen.** Recompute and manual line edits are rejected (§8.4).
 - **Both finalize paths are safe.** Checkout completion finalizes the invoice, and payment processing
   can also mark a fully paid draft as finalized directly. Either way the draft was already converted.
 - **Subscription create checks first.** The rate check in §8.3 runs before the session opens.
+- **Billing currency is locked while a session is open.** A change would leave a USD link on an INR
+  customer, or an INR invoice on a customer now billed in EUR. §8.2 rejects it.
 - **Wallet top-ups.** The INR link pays for the USD credits; the wallet receives them on completion
   (§6.2).
 - **Custom currency.** The draft is already in the billing currency through the custom factor (§5.5),
@@ -555,7 +563,9 @@ flowchart TD
     V -- no --> R1["400"]
     V -- yes --> N{"X is null?"}
     N -- yes --> OK["Save. Invoices follow the charge currency"]
-    N -- no --> S{"rate or custom factor exists for every active,<br/>trialing or paused subscription with currency ≠ X?"}
+    N -- no --> OC{"open checkout session<br/>for this customer?"}
+    OC -- yes --> R0["400: complete or cancel the open checkout first"]
+    OC -- no --> S{"rate or custom factor exists for every active,<br/>trialing or paused subscription with currency ≠ X?"}
     S -- no --> R2["400 listing the missing pairs"]
     S -- yes --> W{"rate or custom factor exists for every wallet<br/>with currency ≠ X?"}
     W -- no --> R3["400 listing the missing pairs"]
@@ -567,7 +577,9 @@ flowchart TD
 - Wallets are checked because their top-ups convert into the billing currency (§6.2).
 - For a custom-currency subscription or wallet, the check is that the custom currency has a factor
   for X, not an FX rate (§5.5).
-- Clearing it back to NULL is always allowed.
+- A change is rejected while the customer has an open checkout session: "Complete or cancel the open
+  checkout first." Sessions expire in about 15 minutes, so the wait is short (§5.6).
+- Clearing it back to NULL is allowed when no checkout session is open.
 - Finalized invoices never change. Open drafts use the value at their own finalize.
 - Recommended practice: set it when creating the customer, so ERP sync starts in the right currency.
 
@@ -689,6 +701,7 @@ Wallet APIs are unchanged. Top-up, balance and transaction endpoints keep their 
 | Deleting a rate that is still needed | 409 | Up to 20 dependent subscriptions or drafts |
 | Payment on an unconverted draft | 400 | The billing currency the invoice will be issued in |
 | Custom currency with no factor for the billing currency | 400 | The custom currency and the billing currency |
+| Changing the billing currency during an open checkout session | 400 | The open checkout session id |
 
 ---
 
@@ -701,6 +714,8 @@ Wallet APIs are unchanged. Top-up, balance and transaction endpoints keep their 
 | Rate edited while a draft is open | The draft uses the rate valid at its finalize. Checkout drafts keep the rate shown to the customer |
 | Rate edited after finalize | No effect. The invoice keeps its frozen rate |
 | Finalize retried after conversion | Conversion skipped |
+| No rate at subscription create, billing-currency change or one-off invoice create | Rejected before anything is written, naming the pair |
+| Payment recorded against an unconverted draft | Rejected. Finalize first, then pay in the billing currency. Pay-first checkout is not affected (§5.6) |
 | No rate when a checkout session is created | Session creation fails, naming the pair. Nothing is charged |
 | Rate edited after a payment link is created | No effect. The customer pays the amount shown |
 | Customer deleted after the draft was created | Treated as no billing currency; the invoice finalizes in the charge currency |
@@ -766,6 +781,7 @@ Extend `invoice_test.go`, `subscription_test.go`, `customer_test.go`, `wallet_te
 | Converted checkout draft, recompute or line edit | Rejected |
 | Checkout session expires | Draft archived, as today |
 | Checkout paid in full, draft marked finalized by payment processing | Invoice already converted; amounts unchanged |
+| Checkout session created | Checkout payment record is in the billing currency |
 | Worked example in §2 | Wallet −$20 in USD; invoice total ₹8,134.00 |
 | Void of that invoice | $20 back to the USD wallet; paid INR through the refund ledger |
 | USD and EUR subscriptions, INR billing | Two INR invoices, each with its own `fx_conversion` |
@@ -787,6 +803,7 @@ Extend `invoice_test.go`, `subscription_test.go`, `customer_test.go`, `wallet_te
 | Custom-currency subscription, billing currency without a factor | Rejected |
 | Set a billing currency that a custom-currency subscription has no factor for | Rejected |
 | FX rate with a custom currency code | Rejected |
+| Change billing currency while a checkout session is open | Rejected; allowed again after the session completes or expires |
 
 ### 11.6 Wallets and credit notes
 
