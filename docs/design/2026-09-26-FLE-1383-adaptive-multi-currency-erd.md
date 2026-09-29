@@ -640,7 +640,15 @@ permission, and `@x-scope` on every handler.
 Create body: `scope`, `scope_id`, `from_currency`, `to_currency`, `rate`, optional `valid_from`,
 `valid_to`, `metadata`.
 
+Rate response: `id`, `scope`, `scope_id`, `from_currency`, `to_currency`, `rate`, `valid_from`,
+`valid_to`, `status`, `metadata`, `created_at`, `updated_at`.
+
+`resolve` response: `rate`, `rate_id`, `scope`, `from_currency`, `to_currency`.
+
 Webhooks: `fx_rate.created`, `fx_rate.updated`, `fx_rate.deleted`.
+
+Permissions: writes are gated on `EntityFXRate`. No role change is needed, because roles grant access
+by wildcard. `search` is tagged `@x-scope "read"`, since it uses POST but only reads.
 
 ### 9.2 Customers and subscriptions
 
@@ -653,6 +661,8 @@ Webhooks: `fx_rate.created`, `fx_rate.updated`, `fx_rate.deleted`.
 
 Deleting a customer or subscription archives its scoped rates.
 
+Wallet APIs are unchanged. Top-up, balance and transaction endpoints keep their current contracts.
+
 ### 9.3 Invoices
 
 | Field | Where | Notes |
@@ -660,7 +670,7 @@ Deleting a customer or subscription archives its scoped rates.
 | `fx_conversion` | Invoice | The snapshot in §3.5. Null on invoices never converted |
 | `original_currency`, `original_amount` | Line item | Null on invoices never converted |
 | `billing_currency_estimate` | Draft invoice and previews | `{ currency, rate, total, resolvable }`. Calculated on read. Shown only when the billing currency differs from the draft's. `resolvable: false` tells the dashboard the draft will fail to finalize |
-| `charge_currency` | Invoice list filter | New filter on the original currency |
+| `charge_currency` | Invoice list filter | New filter on the original currency. The existing `currency` filter matches the billing currency |
 
 **Where the frozen rate is visible**
 
