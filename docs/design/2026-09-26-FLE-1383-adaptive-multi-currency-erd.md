@@ -242,16 +242,16 @@ to a parent, the parent's billing currency applies.
 A jsonb snapshot written once, at conversion, in the same transaction as the converted amounts. NULL
 means the invoice was never converted, and every reader checks that first.
 
-| Field | Meaning |
-| --- | --- |
-| `charge_currency` | Original currency of the draft, for example `usd` |
-| `billing_currency` | Currency the invoice was issued in, for example `inr` |
-| `rate` | The frozen rate |
-| `rate_id` | The `fx_rates` row used. For reference only; never read again |
-| `scope` | Where the rate was found: `subscription`, `customer` or `tenant` |
-| `converted_at` | When the conversion ran |
-| `source.subtotal`, `source.total_discount`, `source.total_prepaid_credits_applied`, `source.net` | Original amounts in the charge currency, before tax |
-| `rounding_adjustment`, `rounding_line_item_id` | The rounding difference and the line that absorbed it (§5.3) |
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `charge_currency` | string | Original currency of the draft, for example `usd` |
+| `billing_currency` | string | Currency the invoice was issued in, for example `inr` |
+| `rate` | decimal string | The frozen rate |
+| `rate_id` | string | The `fx_rates` row used. For reference only; never read again |
+| `scope` | string | Where the rate was found: `subscription`, `customer` or `tenant` |
+| `converted_at` | ISO 8601 timestamp | When the conversion ran |
+| `source.subtotal`, `source.total_discount`, `source.total_prepaid_credits_applied`, `source.net` | decimal strings | Original amounts in the charge currency, before tax |
+| `rounding_adjustment`, `rounding_line_item_id` | decimal string, string | The rounding difference and the line that absorbed it (§5.3) |
 
 `invoice.currency` holds the charge currency while the invoice is a draft and the billing currency
 after conversion.
