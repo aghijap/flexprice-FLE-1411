@@ -383,15 +383,16 @@ usually zero and at most ±0.01.
 
 A converted invoice is a normal INR invoice. Code after finalization needs no FX logic:
 
-| Flow | Behaviour |
-| --- | --- |
-| Card or gateway payment | Charges INR. Payment currency must equal invoice currency, as today |
-| Postpaid wallet payment | Only a postpaid wallet in INR can pay |
-| Prepaid wallet | Never pays invoices. Already applied before conversion |
-| Credit notes and refunds | In INR (§7) |
-| Void | Prepaid credits go back in the charge currency (§6.3) |
-| ERP and Stripe sync | As today. The invoice and the synced customer are both in the billing currency |
-| Recalculating a finalized invoice | Voids it and creates a new charge-currency draft, which converts at its own finalize |
+| Flow | Behaviour | Why it already works |
+| --- | --- | --- |
+| Card or gateway payment | Charges INR. Payment currency must equal invoice currency, as today | Existing payment currency checks |
+| Postpaid wallet payment | Only a postpaid wallet in INR can pay | `GetWalletsForPayment` matches `invoice.currency` |
+| Prepaid wallet | Never pays invoices. Already applied before conversion | `GetWalletsForPayment` picks postpaid wallets only |
+| Balance of a USD prepaid wallet | Counts the draft while it is in USD, stops once it is INR. The wallet was already debited at step 3 | `GetUnpaidInvoicesToBePaid` matches `invoice.currency` |
+| Credit notes and refunds | In INR (§7) | A credit note takes its invoice's currency |
+| Void | Prepaid credits go back in the charge currency (§6.3) | `VoidInvoice` reads `fx_conversion.source` |
+| ERP and Stripe sync | As today. The invoice and the synced customer are both in the billing currency | No change |
+| Recalculating a finalized invoice | Voids it and creates a new charge-currency draft, which converts at its own finalize | `RecalculateInvoice`; in-place recalculation works on drafts only |
 
 A customer with USD and EUR subscriptions gets two INR invoices, each converted on its own.
 
