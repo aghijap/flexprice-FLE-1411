@@ -20,9 +20,13 @@ it. A subscription keeps its own currency, the **charge currency**, and its invo
 charge currency exactly as today. At finalization, if the two differ, the invoice is converted once
 at a rate the tenant configured. The rate is saved on the invoice and never changes after that.
 
-**Non-goals.** Live market rates. Deriving `inr → usd` from a `usd → inr` rate. Paying an invoice in
-a currency other than its own. Changing a finalized invoice. Changing a subscription's currency. A
-separate tax reference rate (§12).
+**Non-goals.**
+
+- Live market rates.
+- Deriving `inr → usd` from a `usd → inr` rate.
+- A Flexprice payment record in a currency other than its invoice's (gateway-level presentment currency is fine).
+- Changing a finalized invoice.
+- Changing a subscription's currency.
 
 **Existing customers are not affected.**
 
@@ -35,8 +39,7 @@ separate tax reference rate (§12).
 Conversion starts only when someone sets a billing currency on a customer and it differs from the
 currency they are charged in. §3.8 lists every code path this design touches.
 
-**Scope.** §3 covers invoice conversion. §4 covers money that crosses the rate through a wallet.
-The work ships in three releases (§10.2).
+**Scope.** §3 covers invoice conversion. §4 details wallet interactions (prepaid deduction and invoice-backed top-ups). All conversions occur on the invoice layer.
 
 ---
 
@@ -66,12 +69,13 @@ erDiagram
         varchar(50)    id PK "fxr_…"
         varchar(50)    tenant_id
         varchar(50)    environment_id
-        varchar(20)    scope "environment | customer | subscription"
-        varchar(50)    scope_id "environment_id | customer_id | subscription_id"
+        varchar(20)    scope "tenant | customer | subscription"
+        varchar(50)    scope_id "'tenant' | customer_id | subscription_id"
         varchar(10)    from_currency "charge currency"
         varchar(10)    to_currency "billing currency"
-        numeric(24_12) rate "to per 1 from — never edited"
-        varchar(50)    superseded_by_id "set on the archived row"
+        numeric(24_12) rate "to per 1 from"
+        timestamp      valid_from "NEW nullable — null for tenant scope or open-ended overrides"
+        timestamp      valid_to   "NEW nullable — null means no upper bound"
         varchar(20)    status "published | archived"
         jsonb          metadata
     }
@@ -94,8 +98,10 @@ erDiagram
     }
     INVOICE_LINE_ITEMS {
         varchar(50)  id PK
-        varchar(10)  currency "= invoice.currency (unchanged)"
-        numeric      amount "converted at the invoice's rate"
+        varchar(10)  currency "= invoice.currency (billing currency post-conversion)"
+        numeric      amount "converted amount in billing currency"
+        varchar(10)  original_currency "NEW nullable — charge currency before conversion"
+        numeric      original_amount "NEW nullable — gross line amount before conversion"
     }
     WALLETS {
         varchar(50)  id PK
@@ -105,10 +111,9 @@ erDiagram
     WALLET_TRANSACTIONS {
         varchar(50)  id PK
         varchar(50)  wallet_id FK
-        varchar(30)  transaction_reason "PURCHASED_CREDIT_INVOICED | … | NEW: WALLET_REFUND, WALLET_MIGRATION"
+        varchar(30)  transaction_reason "PURCHASED_CREDIT_INVOICED | FREE_CREDIT_GRANT | … (unchanged)"
         numeric      amount "in wallet currency"
         numeric      credits_available "left on this block"
-        jsonb        fx_conversion "NEW nullable — rate a purchased block was bought at (Release 2)"
     }
     ENTITY_INTEGRATION_MAPPINGS {
         varchar(50)  entity_id "customer_id"
@@ -123,152 +128,107 @@ erDiagram
 | Table | Change | Why |
 | --- | --- | --- |
 | `customers` | Add `billing_currency`, nullable | The currency the customer is invoiced in. NULL keeps today's behaviour |
-| `fx_rates` | New table | Rates the tenant configures, at environment, customer or subscription scope |
+| `fx_rates` | New table | Rates the tenant configures, at tenant, customer or subscription scope. `valid_from` and `valid_to` allow time-scoped overrides at customer and subscription scope; both are null for tenant-level fixed rates |
 | `invoices` | Add `fx_conversion`, nullable jsonb | The frozen rate and the original amounts. NULL means never converted |
+| `invoice_line_items` | Add `original_currency` and `original_amount`, nullable | Preserves pre-conversion currency and gross amount directly on each line item for exact PDF rendering, display, and API consumers without reverse-math or rounding drift |
 | `entity_integration_mappings` | Add `currency`, default `''`, and add it to the unique index | Zoho and QuickBooks need one ERP customer per currency |
-| `wallet_transactions` | Add `fx_conversion`, nullable jsonb. Release 2 | Saves the rate a purchased credit block was bought at, so a refund returns what was paid |
-| `wallet_transactions.transaction_reason` | New values `WALLET_REFUND`, `WALLET_MIGRATION`. Release 3 | A cash refund and a wallet move must look different from a write-off in the ledger |
 
-`invoice_line_items` is not changed. Lines are converted at the invoice's rate. No backfill anywhere.
+`wallet_transactions` is not changed. Lines are converted at the invoice's rate and retain their original charge currency/amount in `original_currency` and `original_amount`. Wallet credits go in and out in the wallet's own currency; the FX conversion is entirely on the invoice side. No backfill anywhere.
 
 ### 2.2 `customers.billing_currency`
 
-```go
-// ent/schema/customer.go
-field.String("billing_currency").
-    SchemaType(map[string]string{"postgres": "varchar(10)"}).
-    Optional().
-    Nillable().
-    Comment("currency this customer is invoiced in; null means invoices follow the charge currency"),
-```
+| Column | Type | Constraints | Default | Purpose |
+| --- | --- | --- | --- | --- |
+| `billing_currency` | `varchar(10)` | Optional, Nullable | `NULL` | Invoicing currency for this customer. When `NULL`, invoices follow the subscription/charge currency (existing behaviour). |
 
-- Only the API or UI sets it. The system never fills it in.
-- `varchar(10)` and lowercased on write, like the other currency columns.
-- It is read from the customer being invoiced, `invoice.customer_id`. For a child subscription
-  billed to a parent, the parent's billing currency and the parent's customer-level rates apply.
+- Set explicitly via API or UI (never auto-populated by the system).
+- Stored lowercased (e.g. `inr`, `usd`, `eur`).
+- Evaluated from the invoicing customer (`invoice.customer_id`). For child subscriptions billed to a parent entity, the parent's billing currency applies.
 
 ### 2.3 `fx_rates`
 
-```go
-// ent/schema/fxrate.go
+#### Table Schema
 
-var (
-    Idx_fx_rate_live_key = "idx_fx_rate_live_key"
-    Idx_fx_rate_pair     = "idx_fx_rate_pair"
-)
+| Column | Type | Nullable | Description |
+| --- | --- | --- | --- |
+| `id` | `varchar(50)` | No | Primary Key with prefix `fxr_` (immutable) |
+| `tenant_id` | `varchar(50)` | No | Tenant identifier (from BaseMixin) |
+| `environment_id` | `varchar(50)` | No | Environment identifier (from EnvironmentMixin) |
+| `scope` | `varchar(20)` | No | Rate hierarchy scope: `tenant`, `customer`, or `subscription` |
+| `scope_id` | `varchar(50)` | No | Target entity ID (`'tenant'` for tenant scope, `customer_id`, or `subscription_id`) |
+| `from_currency` | `varchar(10)` | No | Charge currency code (e.g. `usd`) |
+| `to_currency` | `varchar(10)` | No | Billing currency code (e.g. `inr`) |
+| `rate` | `numeric(24,12)` | No | Target currency units per 1 source currency unit |
+| `valid_from` | `timestamp` | Yes | Start of validity. `NULL` = unbounded lower bound (always `NULL` for tenant scope) |
+| `valid_to` | `timestamp` | Yes | Exclusive end of validity. `NULL` = open-ended |
+| `status` | `varchar(20)` | No | Lifecycle status: `published` or `archived` |
+| `metadata` | `jsonb` | Yes | Arbitrary key-value metadata |
 
-// BaseMixin gives tenant_id and status; EnvironmentMixin gives environment_id.
-func (FXRate) Mixin() []ent.Mixin {
-    return []ent.Mixin{baseMixin.BaseMixin{}, baseMixin.EnvironmentMixin{}}
-}
+#### Database Indexes
 
-func (FXRate) Fields() []ent.Field {
-    return []ent.Field{
-        field.String("id").SchemaType(pg("varchar(50)")).Unique().Immutable(),
+| Index Name | Columns | Type | Condition / Purpose |
+| --- | --- | --- | --- |
+| `idx_fx_rate_tenant_live` | `(tenant_id, environment_id, scope, scope_id, from_currency, to_currency)` | **UNIQUE** Partial | `status = 'published' AND scope = 'tenant'`<br/>Guarantees exactly one active base rate per currency pair at tenant level. |
+| `idx_fx_rate_override` | `(tenant_id, environment_id, scope, scope_id, from_currency, to_currency, valid_from)` | Non-unique B-tree | Overlap is verified in the service layer. Speeds up date-ranged resolution for customer and subscription overrides. |
 
-        field.String("scope").
-            GoType(types.FXRateScope("")).
-            SchemaType(pg("varchar(20)")).NotEmpty().Immutable(),
-        // customer_id, subscription_id, or environment_id for scope=environment. Never empty.
-        field.String("scope_id").SchemaType(pg("varchar(50)")).NotEmpty().Immutable(),
+#### Scope & Override Rules
 
-        field.String("from_currency").SchemaType(pg("varchar(10)")).NotEmpty().Immutable(),
-        field.String("to_currency").SchemaType(pg("varchar(10)")).NotEmpty().Immutable(),
+- **Tenant Baseline (`scope = 'tenant'`):**
+  - Serves as the fallback rate across the entire tenant. `scope_id` is set to `'tenant'`.
+  - Always active without date bounding (`valid_from` and `valid_to` are both `NULL`).
+  - Exactly one published rate is permitted per currency pair (`idx_fx_rate_tenant_live`).
 
-        // to_currency units per 1 from_currency unit. A change is a new row.
-        field.Other("rate", decimal.Decimal{}).SchemaType(pg("numeric(24,12)")).Immutable(),
+- **Customer & Subscription Overrides (`scope = 'customer' | 'subscription'`):**
+  - **Prerequisite Base Rate:** An active tenant-level rate for the same `from → to` pair must exist before an override can be created.
+  - **Optional Time-Scoping:** Overrides can be open-ended (permanent) or constrained to an active validity window `[valid_from, valid_to)`.
+  - **Non-Overlap Condition:** Multiple overrides may exist for the same entity and currency pair, provided their validity periods do not overlap.
 
-        // Set on the old row when a new rate replaces it.
-        field.String("superseded_by_id").SchemaType(pg("varchar(50)")).Optional().Nillable(),
+- **Historical Invoice Protection:**
+  - Finalized invoices permanently snapshot their conversion rate and amounts in `invoice.fx_conversion`. Modifying rates in `fx_rates` only affects future draft invoice finalizations.
 
-        field.JSON("metadata", map[string]string{}).Optional().SchemaType(pg("jsonb")),
-    }
-}
+### 2.4 `fx_rates` — sample rows
 
-func (FXRate) Indexes() []ent.Index {
-    return []ent.Index{
-        // one live rate per (environment, scope, scope_id, pair)
-        index.Fields("tenant_id", "environment_id", "scope", "scope_id", "from_currency", "to_currency").
-            Unique().
-            StorageKey(Idx_fx_rate_live_key).
-            Annotations(entsql.IndexWhere("((status)::text = 'published'::text)")),
-        index.Fields("tenant_id", "environment_id", "from_currency", "to_currency", "status").
-            StorageKey(Idx_fx_rate_pair),
-    }
-}
-```
+The table below illustrates the three scope levels and the two override modes (permanent and
+time-scoped). All rows belong to the same tenant and environment.
 
-```go
-// internal/types/fx_rate.go
-type FXRateScope string
+| id | scope | scope_id | from | to | rate | valid_from | valid_to | status | notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `fxr_tnt_001` | `tenant` | `tenant` | `usd` | `inr` | `83.00` | `null` | `null` | `published` | Base rate for all customers. No date bounds — always active while published |
+| `fxr_tnt_002` | `tenant` | `tenant` | `eur` | `inr` | `89.50` | `null` | `null` | `published` | Separate base rate for EUR → INR |
+| `fxr_cust_001` | `customer` | `cust_acme` | `usd` | `inr` | `84.50` | `null` | `null` | `published` | Permanent customer override — no date bounds. Acme always gets 84.50 instead of 83 |
+| `fxr_cust_002` | `customer` | `cust_globex` | `usd` | `inr` | `85.00` | `2026-11-01` | `2026-11-30` | `published` | Time-scoped override for November only. Outside this window, Globex falls back to the tenant rate (83) |
+| `fxr_cust_003` | `customer` | `cust_globex` | `usd` | `inr` | `86.00` | `2026-12-01` | `null` | `published` | Future open-ended override for Globex starting December. Active alongside `fxr_cust_002` with no overlap |
+| `fxr_sub_001` | `subscription` | `subs_pro` | `usd` | `inr` | `82.00` | `null` | `2026-10-31` | `published` | Subscription-level override active until end of October, then falls back to customer or tenant rate |
 
-const (
-    FXRateScopeEnvironment  FXRateScope = "environment"
-    FXRateScopeCustomer     FXRateScope = "customer"
-    FXRateScopeSubscription FXRateScope = "subscription"
-)
+### 2.5 `invoices.fx_conversion`
 
-// internal/types/uuid.go
-UUID_PREFIX_FX_RATE = "fxr"
-```
+`invoices.fx_conversion` is an immutable `jsonb` snapshot populated during finalization when a charge-currency draft converts into a billing-currency invoice.
 
-A rate is never edited. `PUT` archives the old row and inserts a new one. The partial unique index
-allows exactly one live rate per scope and pair, the same pattern as `settings`.
+#### Snapshot Data Structure
 
-### 2.4 `invoices.fx_conversion`
-
-```go
-// internal/types/fx_conversion.go
-
-// FXConversion is written once, when a charge-currency draft is converted into the
-// billing currency. Source amounts are in ChargeCurrency and exclude tax.
-type FXConversion struct {
-    ChargeCurrency  string          `json:"charge_currency"`
-    BillingCurrency string          `json:"billing_currency"`
-    Rate            decimal.Decimal `json:"rate"`     // billing units per 1 charge unit
-    RateID          string          `json:"rate_id"`  // fx_rates row used; copied, never re-read
-    Scope           FXRateScope     `json:"scope"`    // scope the rate was found at
-    ConvertedAt     time.Time       `json:"converted_at"`
-    Source          FXSourceAmounts `json:"source"`
-
-    // Rounding difference added to one line so the lines add up to the net (§3.4). Usually 0.
-    RoundingAdjustment decimal.Decimal `json:"rounding_adjustment"`
-    RoundingLineItemID string          `json:"rounding_line_item_id,omitempty"`
-}
-
-type FXSourceAmounts struct {
-    Subtotal                   decimal.Decimal `json:"subtotal"`
-    TotalDiscount              decimal.Decimal `json:"total_discount"`
-    TotalPrepaidCreditsApplied decimal.Decimal `json:"total_prepaid_credits_applied"`
-    Net                        decimal.Decimal `json:"net"` // subtotal − discount − credits, before tax
-}
-```
-
-```go
-// ent/schema/invoice.go
-field.JSON("fx_conversion", &types.FXConversion{}).Optional().SchemaType(pg("jsonb")),
-```
+| Property | Type | Description |
+| --- | --- | --- |
+| `charge_currency` | `string` | Original currency of the charge / subscription (e.g. `usd`) |
+| `billing_currency` | `string` | Final invoice currency (e.g. `inr`) |
+| `rate` | `numeric string` | Frozen exchange rate used for conversion (`to_currency` per 1 `from_currency`) |
+| `rate_id` | `string` | ID of the `fx_rates` record applied (audit reference; never re-queried) |
+| `scope` | `string` | Scope level that resolved: `subscription`, `customer`, or `tenant` |
+| `converted_at` | `ISO 8601 string` | Timestamp when the conversion took place |
+| `source` | `object` | Snapshot of original amounts in `charge_currency` before tax |
+| `source.subtotal` | `numeric string` | Original pre-discount subtotal in charge currency |
+| `source.total_discount` | `numeric string` | Original discounts in charge currency |
+| `source.total_prepaid_credits_applied` | `numeric string` | Original prepaid credits applied in charge currency |
+| `source.net` | `numeric string` | Original pre-tax net (`subtotal − discount − credits`) |
+| `rounding_adjustment` | `numeric string` | Fractional residual adjustment absorbed by a line item |
+| `rounding_line_item_id` | `string` | ID of line item adjusted to guarantee line sums equal invoice net |
 
 - NULL means the invoice was never converted. Every reader checks this first.
 - Written once, at conversion, in the same transaction as the converted amounts.
 - `invoice.currency` is the charge currency while the invoice is a draft and the billing currency
   after conversion. `fx_conversion.charge_currency` keeps the original.
 
-Who reads it:
 
-| Reader | Field used |
-| --- | --- |
-| Finalize retry check | Whole object: set means already converted |
-| Void, to return prepaid credits in the charge currency | `source.total_prepaid_credits_applied` |
-| Zoho and QuickBooks sync | `rate` |
-| API, webhooks, PDF: "₹8,300 converted from $100 at 83" | `rate`, `charge_currency`, `source` |
-| Credit note created from a USD amount | `rate` |
-| Wallet top-ups and refunds (§4) | Whole object |
-| Which line absorbed the rounding difference | `rounding_adjustment`, `rounding_line_item_id` |
-
-If a screen needs a line's original amount, it shows `amount ÷ rate`. That is exact except by one
-rounding unit on the line named in `rounding_line_item_id`, or when the rate is below 1. It is for
-display only.
+Screens, APIs, and PDF templates read `line.original_amount` and `line.original_currency` directly (§2.6) rather than reverse-calculating `amount ÷ rate`, ensuring exact values without floating-point drift or residual distortion.
 
 **Persistence.** The invoice repository lists columns by hand in `Create`, `CreateWithLineItems`
 and `Update`, and the in-memory test store copies fields one by one. `custom_currency` was lost on
@@ -277,55 +237,34 @@ write twice because of this
 `fx_conversion` in all of them, add a round-trip test, and make `Update` keep the value, never
 clear it.
 
-### 2.5 `entity_integration_mappings.currency`
+### 2.6 `invoice_line_items` — original amounts
 
-Zoho and QuickBooks lock a customer to one currency once it has transactions. Today the mapping
-allows one ERP customer per Flexprice customer per provider
-([entityintegrationmapping.go:71-74](../../ent/schema/entityintegrationmapping.go#L71)). A customer
-whose billing currency changes needs a second ERP customer for the new currency.
+To ensure PDFs, customer portals, and external APIs can display the original pre-conversion charges without division rounding errors or residual distortion, two optional fields are added to `invoice_line_items`:
 
-```go
-field.String("currency").
-    SchemaType(pg("varchar(10)")).
-    Default("").
-    Immutable().
-    Comment("currency the provider entity is bound to; empty for entities without a currency and for rows created before FLE-1383"),
-```
+| Column | Type | Constraints | Default | Purpose |
+| --- | --- | --- | --- | --- |
+| `original_currency` | `varchar(10)` | Optional, Nullable | `NULL` | Pre-conversion currency of the line item (e.g. `usd`). Populated only on converted invoices; `NULL` for normal unconverted invoices. |
+| `original_amount` | `numeric(20,8)` | Optional, Nullable | `NULL` | Pre-conversion gross amount of the line item in `original_currency` (e.g. `5.00`). Populated only on converted invoices. |
+
+During `ConvertInvoice`:
+1. `line.original_currency` is stamped with the draft's charge currency (e.g. `usd`).
+2. `line.original_amount` is stamped with the draft's pre-conversion `line.amount` (e.g. `5.00`).
+3. `line.currency` is updated to the customer's `billing_currency` (e.g. `inr`).
+4. `line.amount` is updated to the converted billing amount (e.g. `415.00`).
+
+### 2.7 `entity_integration_mappings.currency`
+
+Zoho and QuickBooks lock a customer to one currency once transactions exist. To support multi-currency sync without collisions, the mapping table is extended:
+
+| Column | Type | Default | Constraints | Description |
+| --- | --- | --- | --- | --- |
+| `currency` | `varchar(10)` | `''` | Immutable | The currency bound to this provider entity. Empty for generic entities and legacy rows. |
+
+The unique constraint is updated to include `currency`:
+`(tenant_id, environment_id, entity_type, entity_id, provider_type, currency)` WHERE `status = 'published'`. This allows one ERP customer per currency.
 
 Invoice, plan and price mappings store `''`. New customer mappings store the currency they were
 created for. Old customer mappings keep `''` and are handled in §7.2.
-
-### 2.6 `wallet_transactions.fx_conversion`
-
-```go
-// ent/schema/wallettransaction.go
-field.JSON("fx_conversion", &types.FXTopupConversion{}).Optional().SchemaType(pg("jsonb")),
-```
-
-```go
-// internal/types/fx_conversion.go
-
-// FXTopupConversion is saved on a purchased credit block whose top-up invoice was converted.
-// The transaction's amounts stay in the wallet currency. This records what the customer
-// paid and at what rate, for refunds.
-type FXTopupConversion struct {
-    BillingCurrency string          `json:"billing_currency"`
-    Rate            decimal.Decimal `json:"rate"`        // billing units per 1 wallet-currency unit
-    RateID          string          `json:"rate_id"`
-    PaidAmount      decimal.Decimal `json:"paid_amount"` // in BillingCurrency, the top-up invoice net before tax
-    InvoiceID       string          `json:"invoice_id"`
-    ConvertedAt     time.Time       `json:"converted_at"`
-}
-```
-
-- Saved once, when a purchased-credit transaction completes after its invoice is paid, as a copy of
-  the invoice's `fx_conversion`.
-- NULL on every block not bought across a rate: granted credits, proration credits, and top-ups in
-  the same currency.
-- `wallet_transactions` already acts as the credit block. `credits_available`, `expiry_date` and
-  `priority` live there, and debits consume blocks by expiry
-  ([`docs/prds/debit-wallet.md`](../prds/debit-wallet.md)).
-- Add the field to the repository `Create` and the in-memory store. `Update` never clears it.
 
 ---
 
@@ -344,7 +283,7 @@ flowchart LR
     PC --> Q{"customer.billing_currency set<br/>and different from inv.currency?"}
     CK["Checkout (pay-first) draft"] -. "same check when the session is created;<br/>finalize reuses fx_conversion" .-> Q
     Q -- no --> FIN["Finalize exactly as today<br/>no rate, nothing saved"]
-    Q -- yes --> R{"ResolveRate<br/>subscription → customer → environment"}
+    Q -- yes --> R{"ResolveRate<br/>subscription → customer → tenant"}
     R -- "not found" --> STAY["Stays DRAFT<br/>error names the pair; not retried by Temporal;<br/>finalized once a rate exists"]
     R -- found --> CONV["ConvertInvoice, once<br/>currency = billing; amounts and lines rewritten;<br/>fx_conversion saved"]
     CONV --> TAX["Tax recalculated in the billing currency"]
@@ -364,46 +303,36 @@ flowchart LR
 
 ### 3.1 Rate lookup
 
-```
-ResolveRate(ctx, from, to, subscriptionID, customerID) → (rate, rateID, scope) | ErrNotFound
+Resolution follows a strict bottom-up precedence: **Subscription Override → Customer Override → Tenant Default**.
 
-1. from equals to            → rate 1. No query, nothing saved.
-
-2. Check each scope in order: subscription, customer, environment.
-   Skip the subscription scope when there is no subscription (one-off invoices).
-       SELECT … FROM fx_rates
-        WHERE tenant_id = ctx.TenantID AND environment_id = ctx.EnvironmentID
-          AND scope = <scope> AND scope_id = <id for that scope>
-          AND from_currency = from AND to_currency = to
-          AND status = 'published'
-        LIMIT 1                                        -- Idx_fx_rate_live_key
-   The first match wins.
-
-3. No match → ierr.NewErrorf("no FX rate configured for %s → %s", from, to).
-       WithHintf("Set a rate for %s → %s at the subscription, customer or environment level").
-       WithReportableDetails({from, to, scopes_tried: [...ids]}).
-       Mark(ierr.ErrNotFound)
-```
+| Precedence | Scope | Filter Criteria | Date Bounding |
+| --- | --- | --- | --- |
+| 1 (Highest) | `subscription` | `scope = 'subscription' AND scope_id = subscription_id AND pair = (from, to)` | Active at `now`: `(valid_from IS NULL OR valid_from <= now) AND (valid_to IS NULL OR valid_to > now)` |
+| 2 (Medium) | `customer` | `scope = 'customer' AND scope_id = customer_id AND pair = (from, to)` | Active at `now`: `(valid_from IS NULL OR valid_from <= now) AND (valid_to IS NULL OR valid_to > now)` |
+| 3 (Baseline) | `tenant` | `scope = 'tenant' AND scope_id = 'tenant' AND pair = (from, to)` | Fixed: No date bounds; single active row enforced by unique index |
 
 ```mermaid
 flowchart TD
-    A["ResolveRate(from, to, subscription_id, customer_id)"] --> I{"from == to?"}
+    A["ResolveRate(from, to, subscription_id, customer_id, at=now)"] --> I{"from == to?"}
     I -- yes --> ID["rate 1<br/>no query, nothing saved"]
     I -- no --> S{"subscription_id given?"}
-    S -- yes --> SQ["fx_rates: scope = subscription, scope_id = subscription_id<br/>pair, status published"]
+    S -- yes --> SQ["scope=subscription, scope_id=sub_id, pair<br/>status=published<br/>(valid_from IS NULL OR valid_from <= now)<br/>AND (valid_to IS NULL OR valid_to > now)"]
     S -- "no (one-off)" --> CQ
     SQ -- found --> WIN["return rate, rate_id, scope"]
-    SQ -- "not found" --> CQ["fx_rates: scope = customer, scope_id = customer_id<br/>pair, status published"]
+    SQ -- "not found" --> CQ["scope=customer, scope_id=customer_id, pair<br/>same date-range filter"]
     CQ -- found --> WIN
-    CQ -- "not found" --> EQ["fx_rates: scope = environment, scope_id = environment_id<br/>pair, status published"]
-    EQ -- found --> WIN
-    EQ -- "not found" --> NF["ErrNotFound naming the pair and every scope checked<br/>never 1, never the reverse pair"]
+    CQ -- "not found" --> TQ["scope=tenant, scope_id='tenant', pair<br/>status=published — no date filter"]
+    TQ -- found --> WIN
+    TQ -- "not found" --> NF["ErrNotFound naming the pair and every scope checked<br/>never 1, never the reverse pair"]
 ```
 
 - At most three indexed lookups. No cache.
+- `at_time` is always `now` — callers never pass a date. The invoice's `fx_conversion.converted_at`
+  already records when resolution happened; that is the audit anchor.
 - A `usd → inr` rate is never used for `inr → usd`. The error names the missing direction.
-- Rates are looked up when converting, never copied onto customers or subscriptions, so replacing
-  the environment rate changes the next invoice of every customer without an override.
+- Tenant-scope rate: no date filter — a single live row is enforced by the unique index (`scope_id = 'tenant'`).
+- Override (customer/subscription): one active row at any point in time, enforced by the service-layer
+  overlap check at create time, not by a database constraint.
 - `GET /v1/fx-rates/resolve` calls the same function, so a preview always matches the invoice.
 
 ### 3.2 Draft: no change
@@ -424,81 +353,58 @@ Compute, recompute, coupons, line reconciliation, previews and wallet balance re
 charge-currency amounts and are not changed. The API can show a billing-currency estimate on a draft
 (§6.3). It is calculated on read and never saved.
 
-### 3.3 Finalization: one new step
+### 3.3 Finalization pipeline
 
-In `performFinalizeInvoiceActions`
-([invoice.go:1057-1216](../../internal/ee/service/invoice.go#L1057)), which already holds the row
-lock:
+Conversion occurs inside the finalized invoice transaction under row lock:
 
-```
-1.  Checkout gate; invoice is still DRAFT                         existing
-2.  Freeze the custom-currency rate                               existing
-3.  Subscription invoices: apply prepaid credits (wallet debit),  existing, charge currency
-    Total = Subtotal − Discount − Credits
-── NEW ──────────────────────────────────────────────────────────────────────────
-4.  billing := CustomerRepo.Get(inv.CustomerID).BillingCurrency    -- cached in Redis, cleared on update
-                                                                     -- customer not found → "" and an Info log
-    if billing is empty, or equals inv.Currency   → go to 7
-    if inv.FXConversion is already set            → go to 7        -- checkout draft, or a retry
-5.  rate := ResolveRate(inv.Currency → billing, inv.SubscriptionID, inv.CustomerID)
-    error → mark ierr.ErrInvalidOperation and return. Nothing is written.
-            The invoice stays DRAFT.
-    check inv.AmountPaid is zero
-6.  ConvertInvoice(inv, lines, rate)                               -- §3.4
-    → inv.Currency = billing; all amounts and lines rewritten; fx_conversion saved
-── END NEW ──────────────────────────────────────────────────────────────────────
-7.  AmountRemaining = AmountDue − AmountPaid; save invoice and lines  existing
-8.  RecalculateTaxesOnInvoice                                      existing. Now also runs for any
-                                                                   invoice with fx_conversion, not only
-                                                                   subscription invoices
-9.  Invoice number; zero-total shortcut; auto_completed;           existing
-    FINALIZED; publish invoice.update.finalized
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Inv as Invoice (Draft)
+    participant W as Wallet
+    participant FX as FX Resolver
+    participant Tax as Tax Engine
+
+    Inv->>Inv: Step 1-2: Validate state & freeze custom-currency rate
+    Inv->>W: Step 3: Apply prepaid credits (in charge currency)
+    Note over Inv: Check customer.billing_currency
+    alt No conversion required or already converted
+        Note over Inv: Skip conversion steps
+    else Currency differs and not yet converted
+        Inv->>FX: Step 4: ResolveRate(charge_curr → billing_curr, now)
+        alt Rate not found
+            Note over Inv: Abort finalize, invoice stays DRAFT (no retry loop)
+        else Rate resolved
+            Inv->>Inv: Step 5: ConvertInvoice (rewrite amounts, save fx_conversion snapshot)
+        end
+    end
+    Inv->>Tax: Step 6: Recalculate taxes in billing currency
+    Inv->>Inv: Step 7: Assign invoice number, transition to FINALIZED
 ```
 
-- **After prepaid credits and discounts**, so only the remainder is converted. One-off invoices apply
-  credits and coupons at compute time
-  ([`applyCreditsAndCouponsToInvoice`, invoice.go:4877-4917](../../internal/ee/service/invoice.go#L4877)),
-  which is also before conversion.
-- **Before tax**, so tax is calculated on billing-currency amounts. One-off invoices calculate tax at
-  draft time; step 8 recalculates it in the billing currency. The saved source amounts therefore
-  exclude tax.
-- **Checkout drafts** convert earlier. The customer pays before finalize, so
-  `CreateComputedDraftInvoice` runs steps 4 to 6 when the checkout session is created. At finalize,
-  step 4 sees `fx_conversion` and skips.
-- **Retries are safe.** `fx_conversion` is saved in the same transaction as the amounts, and step 4
-  skips conversion when it is already set.
+| Step | Action | Currency State | Notes |
+| --- | --- | --- | --- |
+| 1–2 | Gate checks & custom-currency freeze | Charge Currency | Unchanged |
+| 3 | Apply prepaid credits & discounts | Charge Currency | Prepaid wallet debited in charge currency |
+| 4 | Check `billing_currency` & `ResolveRate` | Evaluation | Missing rate leaves invoice in `DRAFT` |
+| 5 | **ConvertInvoice** | **Charge → Billing** | Rewrites line items and invoice totals; writes `fx_conversion` |
+| 6 | Recalculate Taxes | Billing Currency | Recomputes tax rates directly in billing currency |
+| 7 | Numbering & Finalization | Billing Currency | Publishes `invoice.update.finalized` |
 
-### 3.4 Conversion and rounding
 
-```go
-// internal/ee/service/fx_convert.go
-func ConvertInvoice(inv *invoice.Invoice, lines []*invoice.InvoiceLineItem, r ResolvedRate) error
-```
+### 3.4 Conversion and rounding mathematics
 
-```
-conv(x)  = RoundToCurrencyPrecision(x × r.Rate, billing)
+To ensure external accounting systems (QuickBooks, Zoho) and customer-facing PDFs balance perfectly without cent drift:
 
-for each line:
-    amount_b        = conv(amount_c)
-    line_disc_b     = conv(line_item_discount_c)
-    inv_disc_b      = conv(invoice_level_discount_c)
-    prepaid_b       = conv(prepaid_credits_applied_c)
-    line_net_b      = amount_b − line_disc_b − inv_disc_b − prepaid_b
-
-net_c     = subtotal_c − total_discount_c − total_prepaid_credits_applied_c
-net_b     = conv(net_c)                  ← source of truth: what the customer owes before tax
-residual  = net_b − Σ line_net_b
-if residual ≠ 0: add it to amount_b of the line with the largest |line_net_b|
-                 and record it in fx_conversion.rounding_adjustment and rounding_line_item_id
-
-subtotal_b                      = Σ amount_b
-total_discount_b                = Σ (line_disc_b + inv_disc_b)
-total_prepaid_credits_applied_b = Σ prepaid_b
-→ subtotal_b − total_discount_b − total_prepaid_credits_applied_b == net_b, exactly
-
-total_b = net_b (tax is added in step 8); amount_due_b = total_b
-if net_c ≠ 0 and net_b == 0 → ErrInternal "rate is too small for the billing currency's precision"
-```
+1. **Pre-tax Net Conversion (Source of Truth):**
+   $$\text{net}_{\text{billing}} = \text{Round}(\text{net}_{\text{charge}} \times \text{Rate}, \text{precision}_{\text{billing}})$$
+2. **Line Item Conversion:**
+   Each line amount, discount, and credit is converted and rounded to billing precision.
+3. **Residual Absorption:**
+   $$\text{residual} = \text{net}_{\text{billing}} - \sum \text{line\_net}_{\text{billing}}$$
+   Any non-zero residual is allocated to the line item with the largest net absolute value. The adjustment is recorded in `rounding_adjustment` and `rounding_line_item_id`.
+4. **Original Line Stamping:**
+   Before updating `line.amount` and `line.currency` to the converted values, each line item stamps `line.original_currency = charge_currency` and `line.original_amount = pre_conversion_amount`.
 
 The net is converted once, and the lines are forced to add up to it. So the PDF, the portal and the
 ERPs, which all add up lines, always match the saved total.
@@ -534,11 +440,11 @@ A converted invoice is a normal INR invoice. Code after finalization needs no FX
 | Flow | Behaviour | Why it already works |
 | --- | --- | --- |
 | Card or gateway payment | Charges INR | Payment currency must equal invoice currency, checked in three places ([payment.go:249](../../internal/ee/service/payment.go#L249), [payment_processor.go:641](../../internal/ee/service/payment_processor.go#L641), [:739](../../internal/ee/service/payment_processor.go#L739)) |
-| `POST_PAID` wallet payment | Only an INR postpaid wallet can pay | `GetWalletsForPayment` matches `inv.Currency`, and postpaid wallets must be in the billing currency (§5.5) |
+| `POST_PAID` wallet payment | Only a postpaid wallet matching `inv.Currency` (INR) can pay | `GetWalletsForPayment` matches `inv.Currency` |
 | `PRE_PAID` wallet | Never pays invoices. Already applied before conversion | `GetWalletsForPayment` only picks postpaid wallets |
 | Balance of a USD prepaid wallet | Counts the draft while it is USD. Stops once it is INR, by which time the wallet was already debited | `GetUnpaidInvoicesToBePaid` matches `inv.Currency` |
 | Credit notes and refunds | INR, with today's limits | §3.6 |
-| Void | Prepaid credits go back in the charge currency | The only flow that needs a change (§5.5) |
+| Void | Prepaid credits go back in the charge currency from `fx_conversion.source`; paid part via refund ledger in billing currency | `voidInvoice` reads `fx_conversion.source.total_prepaid_credits_applied` |
 | Zoho, QuickBooks | INR invoice with the frozen rate | §7 |
 | Recalculating a finalized invoice | Voids it and creates a new charge-currency draft, which converts at its own finalize | [`RecalculateInvoice`, invoice.go:3883](../../internal/ee/service/invoice.go#L3883). `RecalculateInvoiceV2` works on drafts only |
 
@@ -549,16 +455,16 @@ mixed-currency invoice.
 
 A credit note is always in its invoice's currency. A converted invoice is INR, so its credit notes
 are INR and today's refund limits apply in INR. No new columns on `credit_notes`,
-`credit_note_line_items` or `refunds`. Only one path converts: a refund into a prepaid wallet, which
-ships in Release 2 (§4.2).
+`credit_note_line_items` or `refunds`. No conversion happens here — the invoice is already in the
+billing currency.
 
-| Path | Currency and limit | Rate used | Release |
-| --- | --- | --- | --- |
-| Adjustment credit note (unpaid invoice) | INR. Reduces `amount_due`. Limit: `total − adjustment_amount − amount_paid` | None | 1 |
-| Refund credit note, `BACK_TO_SOURCE` | INR rows against INR payments. Limit: `amount_paid − refunded_amount`. Gateway returns INR | None | 1 |
-| Refund credit note, `PREPAID_WALLET` | Release 1: rejected (§5.6). Release 2: `amount ÷ rate`, credited to the charge-currency wallet | Rate looked up at refund time (§4.2) | 1 rejects, 2 allows |
-| Gateway refund fails, falls back to a wallet | Release 1: billing-currency wallet, as today. Release 2: same conversion as the row above | §4.3 | 1 and 2 |
-| Void | Paid part in INR to an INR wallet. Prepaid credits in the charge currency from `fx_conversion.source` | None. Uses saved amounts | 1 |
+| Path | Currency and limit | Rate used |
+| --- | --- | --- |
+| Adjustment credit note (unpaid invoice) | INR. Reduces `amount_due`. Limit: `total − adjustment_amount − amount_paid` | None |
+| Refund credit note, `BACK_TO_SOURCE` | INR rows against INR payments. Limit: `amount_paid − refunded_amount`. Gateway returns INR | None |
+| Refund credit note, `PREPAID_WALLET` | Rejected on a converted invoice. Use `BACK_TO_SOURCE` | None |
+| Gateway refund fails, falls back to a wallet | Falls back to a billing-currency (INR) wallet, as today | None |
+| Void | Paid part in INR via refund ledger. Prepaid credits in the charge currency from `fx_conversion.source.total_prepaid_credits_applied` | None. Uses saved amounts |
 
 ```mermaid
 flowchart TD
@@ -566,13 +472,9 @@ flowchart TD
     T -- ADJUSTMENT --> ADJ["amount_due reduced in INR<br/>no rate, no change"]
     T -- REFUND --> RT{"refund_target"}
     RT -- BACK_TO_SOURCE --> GW["INR rows against INR payments<br/>gateway returns INR — no rate, no change"]
-    RT -- PREPAID_WALLET --> PH{"release"}
-    PH -- "1" --> REJ["Rejected: use BACK_TO_SOURCE"]
-    PH -- "2" --> DIV["amount ÷ rate looked up now for the invoice's pair<br/>→ charge-currency wallet (§4.2)"]
-    GW -- "gateway refund fails" --> FB{"release"}
-    FB -- "1" --> FB1["Billing-currency wallet, as today"]
-    FB -- "2" --> DIV
-    VOID["Void of a converted invoice"] --> V1["Paid part: INR to an INR prepaid wallet"]
+    RT -- PREPAID_WALLET --> REJ["Rejected — use BACK_TO_SOURCE<br/>invoice is already in billing currency"]
+    GW -- "gateway refund fails" --> FB["Falls back to INR wallet, as today<br/>no conversion"]
+    VOID["Void of a converted invoice"] --> V1["Paid part: refund ledger in INR"]
     VOID --> V2["Prepaid credits: charge currency from fx_conversion.source<br/>never INR ÷ rate"]
 ```
 
@@ -599,292 +501,52 @@ finalization. The two use separate columns and separate code.
 
 The last row is two steps, each saved on its own object. No tenant uses this combination today.
 
-### 3.8 Impact on existing flows
-
-Every code path this design touches, when the new behaviour runs, and what a customer with no
-billing currency sees. None of them may change behaviour when `billing_currency` is NULL. §9.1 tests
-this.
-
-| Code path | New behaviour runs when | Customer with no billing currency |
-| --- | --- | --- |
-| `performFinalizeInvoiceActions` | Billing currency is set and differs from `inv.Currency` | One cached customer read, then the existing path. No `fx_rates` query |
-| `RecalculateTaxesOnInvoice` | `fx_conversion` is set | Unchanged. Runs for subscription invoices only |
-| `CreateComputedDraftInvoice` (checkout) | Billing currency is set and differs from the draft's | Unchanged |
-| `CreateInvoice`, one-off | Billing currency is set and differs from `req.Currency` | Unchanged |
-| `validateInvoicePaymentEligibility` | Draft not yet converted, and billing currency differs from its currency | Unchanged |
-| `createSubscription`, checkout create | Invoicing customer's billing currency differs from `req.Currency` | Unchanged. An `fx_rate` in the request is rejected |
-| `CustomerService.Create/Update` | Request contains `billing_currency` | Unchanged |
-| `CreateWallet` | `POST_PAID` wallet and billing currency is set | Unchanged |
-| `TopUpWallet` purchase, auto top-up | `PRE_PAID` wallet, billing currency set and different from the wallet's | Unchanged |
-| Void | `fx_conversion` is set | Unchanged. One amount in `inv.Currency` |
-| `FinalizeCreditNote`, wallet target | `fx_conversion` is set | Unchanged |
-| Grouped-invoice merge | Invoicing customer has a billing currency | Unchanged |
-| Zoho and QuickBooks rate | `fx_conversion` is set | ERP's own rate, as on `feat/fx-rates` |
-| Per-currency ERP customer | `fx_conversion` is set | Existing mapping, as today |
-| Stripe outbound invoice sync | `fx_conversion` is set | Unchanged |
-| Invoice, subscription, customer responses | Always. New fields only | `fx_conversion: null`, `billing: null`, `billing_currency: null` |
-| `billing_currency_estimate` on drafts and previews | Billing currency set and different from the draft's | Not returned |
-| Repositories | Always. New columns | NULL is saved and read back. `Update` never clears the field |
-| `fx_rates` APIs, RBAC entity, webhooks | Only when called | Nothing calls them |
-| Wallet top-up rate check and block stamp (§4.1) | Billing currency set and different from the wallet's; invoice has `fx_conversion` | Unchanged |
-| Credit-note refund into a wallet (§4.2, §4.3) | `fx_conversion` is set | Unchanged |
-| Wallet refund, migrate, balance estimate (§4.4 to §4.6) | Only when called; conversion only when the billing currency differs | Rate of 1, nothing else changes |
-| Migration | Once | Additive columns and one index swap. No backfill |
-
-Two existing behaviours this work does **not** change: the case-sensitive currency check at
-[payment_processor.go:739](../../internal/ee/service/payment_processor.go#L739), and whether a
-grouped-invoicing parent can have children in different currencies today.
-
 ---
 
-## 4. Wallets across the rate
+## 4. Wallets and invoice conversion
 
-Invoices are converted; wallets are not. **A wallet balance is never converted.** Credits go in and
-come out in the wallet's currency. The rate applies only to money on the other side of the wallet,
-such as a top-up invoice or a refund, and is saved next to it.
+Wallets are not changed by this design. The rule is simple:
 
-What already works in Release 1, with no wallet change:
+> **A wallet balance is never converted. Credits go in and come out in the wallet's own currency.**
 
-- Prepaid credits reduce a cycle invoice in the charge currency, before conversion (§3.3, step 3).
-- Downgrade, cancellation and grant credits go to the charge-currency wallet.
-- Void returns prepaid credits in the charge currency (§5.5).
+FX conversion is entirely on the invoice side. The wallet only interacts with conversion at two points:
 
-What this section adds, and when:
+### 4.1 Prepaid credits applied before conversion
 
-| Capability | Release |
-| --- | --- |
-| Customer billed in INR buys credits for a USD wallet (§4.1) | 2 |
-| Refund credit note paid into a wallet on a converted invoice (§4.2) | 2 |
-| Failed gateway refund falls back to the charge-currency wallet (§4.3) | 2 |
-| Cash refund of unused credits, purchased or granted (§4.4) | 3 |
-| Wallet balance shown in the billing currency (§4.5) | 3 |
-| Prepaid balance moved into a postpaid wallet in another currency (§4.6) | 3 |
-
-Until Release 2, the first two are blocked (§5.5, §5.6).
-
-### 4.1 Buying credits across the rate
-
-A top-up already creates a one-off invoice in the wallet currency for
-`credits × topup_conversion_rate`
-([wallet.go:1158-1202](../../internal/ee/service/wallet.go#L1158)). It is finalized immediately, or
-held as a checkout draft for pay-first. When it is paid, `CompletePurchasedCreditTransactionWithRetry`
-adds the credits to the wallet
-([payment_processor.go:782-803](../../internal/ee/service/payment_processor.go#L782)).
-
-With invoice conversion in place and the Release 1 top-up block removed, this already gives the
-PRD's result:
+Prepaid credits reduce the charge-currency draft before `ConvertInvoice` runs (finalize step 3).
+The wallet is debited in its own currency (the subscription's charge currency). Only the remaining
+net is converted. This is existing behaviour — no change.
 
 ```
-Customer billed in INR buys 300 USD of credits. Rate 100.
-
-1. Top-up invoice: currency usd, total 300.00                         existing
-2. Finalize (or checkout session for pay-first):
-       conversion (§3.3) → currency inr, total 30,000.00,
-       fx_conversion { charge usd, rate 100, source.net 300.00 }       Release 1
-3. Customer pays ₹30,000 by card, payment link or INR postpaid wallet  existing
-4. CompletePurchasedCreditTransaction adds 300 USD to the wallet       existing
-5. NEW: copy the invoice's fx_conversion onto the credit block          Release 2
+Invoice draft: $100 (usd)
+Prepaid wallet: $20 debited
+Net after credits: $80 (usd)
+ConvertInvoice at rate 83 → ₹6,640 (inr)
+customer pays ₹6,640
 ```
 
-The credits added in step 4 come from the pending transaction created in step 1:
-`completePurchasedCreditTransaction` adds `tx.Amount` and `tx.CreditAmount`
-([wallet.go:1296-1420](../../internal/ee/service/wallet.go#L1296)), never the invoice total. That is
-why converting the invoice does not change the credits.
+### 4.2 Cross-currency top-ups (PURCHASED_CREDIT_INVOICED)
 
-```mermaid
-sequenceDiagram
-    participant Cu as Customer (billed in INR)
-    participant W as WalletService
-    participant Inv as InvoiceService
-    participant Pay as Payment processing
-    Cu->>W: top up 300 USD credits
-    W->>W: rate check: ResolveRate(usd → inr) must succeed
-    W->>W: pending credit transaction: 300 USD, wallet currency
-    W->>Inv: one-off invoice, currency usd, total 300.00
-    Inv->>Inv: conversion at finalize (or checkout session)<br/>currency inr, total 30,000.00, fx_conversion { rate 100 }
-    Cu->>Pay: pays ₹30,000 (card, payment link, INR postpaid wallet)
-    Pay->>W: CompletePurchasedCreditTransaction(tx)
-    W->>W: wallet += tx.Amount = 300 USD (never the invoice total)
-    W->>W: copy invoice.fx_conversion onto the credit block
-```
-
-Changes:
-
-- Remove the Release 1 top-up block (§5.5) in the `TopUpWallet` purchase path.
-- Check that a rate `wallet currency → billing currency` exists when the top-up is requested, before
-  any pending transaction is written. Otherwise reject and name the pair.
-- In `CompletePurchasedCreditTransaction`, copy `fx_conversion` from the invoice onto the block.
-- The top-up response and the wallet transaction API include `fx_conversion` and the converted
-  invoice total, so the caller sees both "300 USD credits" and "₹30,000 due".
-- Auto top-up and saved-card top-up use the same path. Their cool-off and validation rules check the
-  wallet, not the invoice currency, so they are unaffected.
-
-The rate is fixed when the customer sees the price: at finalize for an immediate top-up, at session
-creation for pay-first. If tax applies, it is calculated on the converted amount, so the INR invoice
-can total more than `credits × rate`; `paid_amount` on the block is the amount before tax.
-
-### 4.2 Refund credit note into a wallet, on a converted invoice
-
-Release 1 rejects this (§5.6). Release 2 handles it:
+A purchased top-up creates a one-off invoice in the wallet currency. That invoice goes through the
+normal `ConvertInvoice` flow at finalization. The wallet receives credits in the wallet currency
+after the invoice is paid. No new code in the wallet service.
 
 ```
-settleToWallet(row) on an invoice with fx_conversion:
-  rate     := ResolveRate(fx.charge_currency → inv.currency, inv.subscription_id, inv.customer_id)
-              the invoice's own pair, looked up now (PRD: "the rate resolved at refund time")
-  credits  := RoundToCurrencyPrecision(row.amount ÷ rate, fx.charge_currency)
-  wallet   := EnsurePrepaidWallet(inv.customer_id, fx.charge_currency)
-  TopUpWallet(wallet, credits, reason CREDIT_NOTE, reference row)
-  the refund row stays in the invoice currency; row.settled_amount = row.amount;
-  refund_destination_id = the wallet transaction, whose metadata records { rate, rate_id, billing_amount }
+Customer (billed INR) tops up 300 USD credits:
+  1. Top-up invoice: currency=usd, total=$300        ← existing
+  2. ConvertInvoice → currency=inr, total=₹30,000    ← existing conversion flow
+  3. Customer pays ₹30,000                            ← existing
+  4. Wallet += $300 credits                           ← existing (tx.Amount, never the invoice total)
 ```
 
-```mermaid
-flowchart LR
-    CN["Refund credit note, target PREPAID_WALLET<br/>converted invoice, amount ₹8,300"] --> R{"ResolveRate(usd → inr) now?"}
-    R -- "not found" --> X["Rejected unless the target is BACK_TO_SOURCE"]
-    R -- "found: 83" --> D["credits = 8,300 ÷ 83 = 100.00 USD"]
-    D --> W["EnsurePrepaidWallet(customer, usd)"] --> T["TopUpWallet 100 USD, reason CREDIT_NOTE<br/>metadata: rate, rate_id, billing_amount"]
-    T --> S["refund row: currency inr, settled_amount 8,300,<br/>refund_destination_id = the wallet transaction"]
-```
+The wallet transaction has no FX fields. The invoice carries `fx_conversion` as usual.
 
-- While rates stay fixed, the rate found equals the invoice's frozen rate, so the customer gets back
-  exactly what they were billed in USD (₹8,300 ÷ 83 = $100). If the rate was replaced, the customer
-  is refunded at today's rate, which the PRD accepts.
-- If no rate exists, finalizing the credit note is rejected and names the pair, unless the target is
-  `BACK_TO_SOURCE`. A refund never goes to a wallet in the wrong currency.
+### 4.3 Void of a converted invoice
 
-### 4.3 Failed gateway refund
+Void returns prepaid credits in the charge currency using `fx_conversion.source.total_prepaid_credits_applied`
+from the invoice — never by dividing the billing amount by the rate. The paid portion (in billing
+currency) is returned via the refund ledger as today. This is the only code change in the void path.
 
-`refundToWalletAsFallbackToFailure` writes a wallet row in the invoice currency. For a converted
-invoice, Release 2 sends it through §4.2 instead, so a failed INR gateway refund becomes USD credits
-the customer can use, not an INR wallet they cannot.
-
-### 4.4 Cash refund of unused credits
-
-Nothing refunds wallet credits as cash today:
-
-- `POST /v1/wallets/:id/terminate` debits the remaining balance as `WALLET_TERMINATION` and closes
-  the wallet. No money is returned ([wallet.go:1845](../../internal/ee/service/wallet.go#L1845)).
-- `POST /v1/wallets/:id/debit` is a manual debit with no money movement.
-- The refund ledger only refunds invoice payments.
-- `OUT_OF_BAND` exists as an enum value but nothing creates it
-  ([refund-architecture-erd §8.3](2026-08-28-refund-architecture-erd.md)).
-
-So this is a new endpoint, `POST /v1/wallets/:id/refund`, for purchased and granted credits alike.
-
-| Credit block | Rate used |
-| --- | --- |
-| Purchased, with a saved rate (`PURCHASED_CREDIT_INVOICED`) | The block's `fx_conversion.rate`. The customer gets back what they paid |
-| Purchased, no saved rate (same-currency top-up) | None. Refund in the wallet currency |
-| Granted, proration, credit note, bonus | `ResolveRate(wallet currency → billing currency)` now, at customer or environment scope |
-
-```
-RefundCredits(wallet, credits):
-  blocks := blocks with credits_available > 0,
-            purchased first (newest first), then granted (newest first)
-  if granted blocks are needed and the billing currency differs from the wallet's:
-      rate_now := ResolveRate(wallet.currency → billing_currency)
-      not found → reject, naming the pair, before any block is debited
-  for each block until `credits` is covered:
-      take   := min(block.credits_available, remaining)
-      debit take from the block, in the wallet currency (reason WALLET_REFUND)
-      value  := take × wallet.conversion_rate                               -- wallet currency
-      owed   += purchased with saved rate : value × block.fx_conversion.rate   in the block's billing currency
-                otherwise                  : value × rate_now                  in the current billing currency
-                                              (rate_now = 1 when there is no billing currency
-                                               or it equals the wallet's)
-  → one refund row per block
-```
-
-```mermaid
-flowchart TD
-    A["POST /wallets/:id/refund { credits: N }"] --> G{"granted blocks needed, and the billing<br/>currency differs from the wallet's?"}
-    G -- yes --> RR{"ResolveRate(wallet currency → billing) now?"}
-    RR -- "not found" --> REJ["Rejected before any block is debited"]
-    RR -- found --> ALLOC
-    G -- no --> ALLOC["Take N from blocks with credits left:<br/>purchased newest first, then granted newest first;<br/>debit each block in the wallet currency"]
-    ALLOC --> P["Purchased block with saved rate:<br/>value × saved rate, in that block's billing currency"]
-    P --> PGW["row → GATEWAY against that block's top-up payment"]
-    ALLOC --> GR["Granted block: value × rate looked up now,<br/>in the current billing currency"]
-    GR --> CAP{"a top-up payment of this wallet<br/>with refund capacity left?"}
-    CAP -- yes --> GW["row → GATEWAY against that payment"]
-    CAP -- no --> OOB["row → OUT_OF_BAND, payment_id null<br/>settled with POST /refunds/:id/settle"]
-```
-
-Where the money comes from:
-
-| Refund row for | `payment_id` | Destination | How it settles |
-| --- | --- | --- | --- |
-| Purchased block | That block's top-up payment | `GATEWAY` | Like any refund row: gateway adapter, webhook, wallet fallback on failure |
-| Granted block, while a top-up payment of this wallet still has refund capacity | That payment | `GATEWAY` | The gateway refunds against the payment |
-| Granted block, no payment capacity left | `NULL` | `OUT_OF_BAND` | An operator sends the money and records it with `POST /v1/refunds/:id/settle { "reference": "…" }` |
-
-- This follows the refund ledger's existing rule: spread across payments up to their capacity, then
-  one row for the rest.
-- A failed gateway row falls back to the wallet, as today. The money stays with the customer.
-- A purchased block paid in a currency other than the customer's current billing currency is
-  refunded in the currency it was paid in, using the block's saved `billing_currency`.
-- Request body: `{ "credits": "200" }` or `{ "all": true }`. The response lists the refund rows with
-  their block, rate and destination.
-
-### 4.5 Balance in the billing currency
-
-Display only. `GET /v1/wallets/:id/balance/real-time` and the customer portal gain:
-
-```jsonc
-{ "wallet_id": "wallet_…", "currency": "usd", "real_time_balance": "212.40",
-  "billing_currency_estimate": { "currency": "inr", "rate": "83", "balance": "17629.20", "resolvable": true } }
-```
-
-- Calculated on read: real-time balance × the rate for `wallet currency → billing currency` at
-  customer or environment scope.
-- Not returned when the customer has no billing currency or it equals the wallet's.
-  `resolvable: false` when no rate exists.
-- Never saved and never used in any calculation. The wallet's `balance`, `credit_balance`, alerts and
-  auto top-up thresholds stay in the wallet currency.
-
-### 4.6 Moving a prepaid balance into a postpaid wallet
-
-The PRD allows closing a prepaid wallet and moving its balance into a new postpaid wallet, converting
-once if the currencies differ. No such operation exists today.
-
-```
-POST /v1/wallets/:id/migrate   { "target_wallet_type": "POST_PAID", "target_currency": "inr" }
-
-1. Checks:
-   - the source is PRE_PAID and active
-   - target_currency equals the customer's billing currency (§5.5)
-   - the customer has no active POST_PAID wallet in that currency (PRD: one per currency)
-2. Same currency   → move the balance 1:1
-   Different       → rate := ResolveRate(source currency → target_currency), customer scope
-                     not found → reject, naming the pair
-                     target_amount := RoundToCurrencyPrecision(balance × rate, target_currency)
-3. In one transaction:
-   - debit the source to zero (reason WALLET_MIGRATION)
-   - close the source, as TerminateWallet does
-   - create the target and credit target_amount (reason WALLET_MIGRATION,
-     metadata { source_wallet_id, rate, rate_id })
-4. Saved rates on purchased blocks are not carried over. After the move, the balance is a postpaid
-   balance in the billing currency and its refunds need no rate.
-```
-
-```mermaid
-flowchart TD
-    A["POST /wallets/:id/migrate<br/>{ target_wallet_type: POST_PAID, target_currency }"] --> V{"source PRE_PAID and active?<br/>target_currency = billing currency?<br/>no active POST_PAID wallet in it?"}
-    V -- no --> R["400"]
-    V -- yes --> S{"same currency?"}
-    S -- yes --> M1["target_amount = balance"]
-    S -- no --> RR{"ResolveRate(source → target)<br/>at customer scope?"}
-    RR -- "not found" --> R2["400 naming the pair; nothing changed"]
-    RR -- found --> M2["target_amount = round(balance × rate, target)"]
-    M1 --> TX
-    M2 --> TX["One transaction:<br/>debit source to 0 (WALLET_MIGRATION), close source,<br/>create target, credit target_amount with rate metadata"]
-```
-
-This is the only place where a wallet balance is converted. It is an explicit action
-by an operator, recorded as a move between two wallets.
-
----
 
 ## 5. Guardrails
 
@@ -895,46 +557,52 @@ missing rate, with a hint naming the currency pair and the IDs involved.
 
 | Rule | Enforced in |
 | --- | --- |
-| **Valid input.** `from ≠ to`, `rate > 0`, both codes valid. With custom currencies configured, a custom code may be `from` but never `to`. `scope_id` must exist in this tenant and environment and be the right type. For `scope = subscription`, the subscription's currency must equal `from_currency` | `FXRateService.Create` |
-| **One live rate per scope and pair.** A second `POST` returns `409` with the existing id. Use `PUT` to change a rate | `Idx_fx_rate_live_key`, plus a pre-check for a clear error |
-| **Rates are replaced, not edited.** `PUT` archives the old row, sets `superseded_by_id` and inserts the new one in one transaction, even for rates never used | `FXRateService.Update` |
-| **No delete that strands a subscription.** `DELETE` is refused if a live subscription or open draft would be left with no rate for its pair. The error lists up to 20 of them. A rate that is overridden everywhere it applies can be deleted | `FXRateService.Delete`, using the same lookup with that row excluded |
+| **Valid input.** `from ≠ to`, `rate > 0`, both codes valid. With custom currencies configured, a custom code may be `from` but never `to`. For `scope = tenant`, `scope_id` is set to `'tenant'`; for `scope = customer`, `scope_id` is `customer_id`; for `scope = subscription`, `scope_id` is `subscription_id` and the subscription's currency must equal `from_currency`. If `valid_from` and `valid_to` are both set, `valid_from` must be before `valid_to` | `FXRateService.Create` |
+| **Tenant scope: one live rate per pair.** `scope_id` is set to `'tenant'`. A second `POST` for the same pair returns `409`. Use `PUT` to update the existing rate | `idx_fx_rate_tenant_live`, plus a pre-check for a clear error |
+| **Override scope: no overlapping periods.** Before inserting or updating a customer- or subscription-scope rate, the service checks that no other published row for the same scope/pair has an overlapping `[valid_from, valid_to)` window. Overlap uses null-safe logic: `null valid_from` = −∞, `null valid_to` = +∞. A `409` is returned if an overlap is found | `FXRateService.Create / Update` |
+| **Override requires a tenant base rate.** A customer- or subscription-scope rate can only be created if a published tenant-scope rate exists for the same `from → to` pair. Rejected with a clear error if the base is missing | `FXRateService.Create` |
+| **Standard transactional updates.** `PUT / PATCH` updates the rate row directly (`rate`, `valid_from`, `valid_to`, `metadata`, `status`). Finalized invoices are completely unaffected because they freeze rates in `fx_conversion`. Overrides re-verify non-overlap when dates change | `FXRateService.Update` |
+| **No delete that strands a subscription.** `DELETE` is refused if a live subscription or open draft would be left with no active rate for its pair at the current time. The error lists up to 20 of them | `FXRateService.Delete`, using the same lookup with that row excluded |
 | **Tenant and environment isolation.** A staging rate never applies in production | Mixins and query filters |
 
 ### 5.2 Setting or changing a billing currency
 
-| Rule | Enforced in |
-| --- | --- |
-| **Valid currency.** If custom currencies are configured, it must be a fiat currency, not a custom code, because invoices are fiat | `CustomerService.Create/Update` |
-| **Every subscription must have a rate.** Check every active, trialing or paused subscription this customer pays for, as the subscriber or as the invoicing customer, whose currency differs from the new value. Do the same for open drafts. If any rate is missing, reject and list every missing pair: *"No FX rate configured for USD → INR (subscription subs_…), EUR → INR (subscription subs_…)"* | `CustomerService.Update` |
-| **No funded postpaid wallet in another currency.** That wallet could never pay an invoice again. Empty or close it first. Prepaid wallets are not checked; they stay in the charge currency | `CustomerService.Update` |
-| **Clearing is allowed.** Setting it back to null returns invoices to the charge currency | — |
-| **Applies going forward.** Finalized invoices never change. Open drafts use the value at their own finalize | Only finalize reads `billing_currency` |
+When a customer's `billing_currency` is set or updated to a non-null currency `X`:
+
+| Rule | Enforced in | Description |
+| --- | --- | --- |
+| **Valid fiat currency** | `CustomerService.Create / Update` | If custom currencies are configured, `billing_currency` must be a valid fiat currency code. |
+| **All active subscriptions must have resolvable rates** | `CustomerService.Update` | If the customer has active, trialing, or paused subscriptions where `sub.currency != X`, `ResolveRate(sub.currency, X)` must be resolvable for each one. Rejects listing all missing pairs. |
+| **All customer wallets must have resolvable rates** | `CustomerService.Update` | For every wallet owned by the customer where `wallet.currency != X`, `ResolveRate(wallet.currency, X)` must be resolvable. Rejects listing all missing pairs. |
+| **Clearing is allowed** | `CustomerService.Update` | Setting `billing_currency = NULL` is always permitted and returns future invoices to the charge currency. |
+| **Applies going forward** | Invoice Finalization | Finalized invoices are frozen and never change. Open drafts convert at their own finalization. |
+
+> [!TIP] The recommended practice is to set `billing_currency` at customer creation time, so that ERP
+> syncs always start with the correct currency. When updating an existing customer with active subscriptions
+> or wallets, all necessary FX conversion rates must already be configured.
 
 ```mermaid
 flowchart TD
-    A["PUT /customers/:id { billing_currency: X }"] --> V{"valid code, and fiat when<br/>custom currencies are configured?"}
-    V -- no --> R1["400"]
-    V -- yes --> N{"X is null?"}
-    N -- yes --> OK["Save. Invoices follow the charge currency"]
-    N -- no --> SUBS["Every active / trialing / paused subscription this customer pays for<br/>where sub.currency != X"]
-    SUBS --> RR{"ResolveRate(sub.currency → X)<br/>found for every one?"}
-    RR -- "any missing" --> R2["400 listing every missing pair"]
-    RR -- all --> DR{"open drafts with currency != X<br/>have a rate too?"}
-    DR -- no --> R2
-    DR -- yes --> PW{"POST_PAID wallet with a balance<br/>in a currency != X?"}
-    PW -- yes --> R3["400 naming the wallet — empty or close it first"]
-    PW -- no --> OK2["Save. Applies to invoices finalized after this;<br/>finalized invoices unchanged"]
+    A["PUT /customers/:id { billing_currency: X }"] --> V{"Valid fiat currency?"}
+    V -- no --> R1["400: Invalid currency"]
+    V -- yes --> N{"X is NULL?"}
+    N -- yes --> OK["Save. Invoices follow charge currency"]
+    N -- no --> CHK_SUBS["Check active/trialing/paused subscriptions<br/>where sub.currency != X"]
+    CHK_SUBS --> RS{"ResolveRate(sub.currency → X)<br/>exists for all?"}
+    RS -- any missing --> R2["400: Missing rate for subscription(s)"]
+    RS -- all found --> CHK_WAL["Check customer wallets<br/>where wallet.currency != X"]
+    CHK_WAL --> RW{"ResolveRate(wallet.currency → X)<br/>exists for all?"}
+    RW -- any missing --> R3["400: Missing rate for wallet(s)"]
+    RW -- all found --> SAVE["Save billing_currency = X<br/>Applies to future invoice finalizations"]
 ```
 
 ### 5.3 Subscriptions
 
-| Rule | Enforced in |
-| --- | --- |
-| **A rate must exist before a subscription is created.** Find the invoicing customer (the customer, if there is none). If its billing currency differs from the subscription currency, a rate must exist at customer or environment scope, or the request must include `fx_rate` (§6.2). Otherwise: *"No exchange rate configured for USD → INR. Set a rate before subscribing this customer to a USD plan."* Placed next to the existing `EnforceCurrency` check ([subscription.go:123-130](../../internal/ee/service/subscription.go#L123)) | `createSubscription` |
-| **Checkout-gated create checks first.** The same check runs before the checkout session opens, so a customer is never shown a price we cannot invoice | `CheckoutSessionService` |
-| **Subscription currency cannot change.** Plan change v2 requires the target plan in the same currency. Plan change v1 creates a new subscription, so it passes the create check | Existing |
-| **Plan change, addon attach and quantity change need no new check.** Their invoices are charge-currency drafts that convert at finalize. The delete rule in §5.1 keeps the rate in place | Existing flow |
+| Rule | Enforced in | Description |
+| --- | --- | --- |
+| **Rate must exist at subscription creation** | `createSubscription` / `CheckoutSessionService` | If the invoicing customer has `billing_currency` set and `billing_currency != sub.currency`, an active rate must be resolvable (`ResolveRate(sub.currency, billing_currency)`), or passed inline via `fx_rate` in the request payload. Otherwise rejected (400): *"No exchange rate configured for USD → INR. Set a rate before subscribing this customer."* Placed alongside the existing `EnforceCurrency` check. |
+| **Subscription currency is strictly immutable** | Existing | `subscription.currency` is strictly immutable once created. Plan change v2 requires the target plan in the same currency. Changing a subscription's currency requires canceling and creating a new subscription. |
+| **Plan change, addons, and proration** | Existing | Invoices are generated as charge-currency drafts and converted at finalize. |
 
 ```mermaid
 flowchart TD
@@ -945,7 +613,7 @@ flowchart TD
     FX -- no --> CREATE["Create as today — no FX code runs"]
     B -- yes --> INL{"fx_rate in the request?"}
     INL -- yes --> ROW["Create the subscription-level fx_rates row<br/>in the same transaction"] --> CREATE2["Create subscription"]
-    INL -- no --> RES{"ResolveRate(C → billing)<br/>at customer or environment scope?"}
+    INL -- no --> RES{"ResolveRate(C → billing)<br/>at customer or tenant scope?"}
     RES -- found --> CREATE2
     RES -- "not found" --> RJ["400: No exchange rate configured for C → billing.<br/>Set a rate before subscribing this customer"]
     CK["Checkout-gated create"] -. "runs this before the session opens" .-> IC
@@ -966,44 +634,26 @@ flowchart TD
 
 ### 5.5 Wallets
 
-| Rule | Enforced in |
-| --- | --- |
-| **Postpaid wallets are in the billing currency.** They pay finalized invoices, and those are in the billing currency. Checked on wallet create, and on billing-currency change (§5.2) | `CreateWallet` |
-| **Release 1 only: no cross-currency top-up.** A purchased top-up on a prepaid wallet whose currency differs from the billing currency is rejected: *"Top-ups in a currency other than the billing currency are not supported yet."* Free credits, credit grants, proration credits and refund fallbacks are not purchases and are allowed. Auto top-up checks the same condition and skips with an Info log instead of failing ([`triggerAutoTopup`, wallet.go:4235](../../internal/ee/service/wallet.go#L4235)); the low-balance alert still fires. Removed in Release 2 (§4.1) | `TopUpWallet` purchase path ([wallet.go:1158](../../internal/ee/service/wallet.go#L1158)); `triggerAutoTopup` |
-| **Void returns prepaid credits in the charge currency.** The paid part (`amount_paid − refunded_amount`) goes back in the billing currency, as today. The prepaid credits go back to the wallet they came from, using `fx_conversion.source.total_prepaid_credits_applied`, never the INR amount divided by the rate. Today both go back as one amount in the invoice currency ([invoice.go:1444-1452](../../internal/ee/service/invoice.go#L1444)) | `voidInvoice`; `PrepareRefundsForVoidedInvoice` takes a currency per row |
-| **Credits are applied before conversion.** Finalize step 3 runs before step 4. No wallet code converts anything during invoice conversion | Existing order |
-| **Proration and cancellation credits are unchanged.** They go to a prepaid wallet in the subscription currency ([wallet.go:3103](../../internal/ee/service/wallet.go#L3103)) | Existing |
+| Rule | Enforced in | Description |
+| --- | --- | --- |
+| **Unrestricted wallet creation** | `CreateWallet` | Wallets can be created in any currency without restriction. |
+| **Prepaid credit application** | Finalize step 3 | Debited strictly in the subscription's charge currency before invoice conversion (§4.1). |
+| **Postpaid settlement matching** | `GetWalletsForPayment` | Settles automatically only if the postpaid wallet currency exactly matches `invoice.currency` (billing currency post-conversion). |
+| **Void restitution** | `voidInvoice` | Prepaid credits return to the charge-currency wallet via `fx_conversion.source.total_prepaid_credits_applied` (§4.3). |
 
 ### 5.6 Payments, credit notes and refunds
 
-| Rule | Enforced in |
-| --- | --- |
-| **Payment currency equals invoice currency.** No change. The check at [payment_processor.go:739](../../internal/ee/service/payment_processor.go#L739) is case-sensitive while the other two are not; it is left as is | Existing |
-| **Credit notes are in the invoice currency**, with today's limits. No change | Existing |
-| **Release 1 only: no refund to a prepaid wallet on a converted invoice.** Use `BACK_TO_SOURCE`. Today it would create an INR wallet that the customer's USD usage can never draw from. Release 2 sends it to the charge-currency wallet (§4.2). The existing fallback to a billing-currency wallet when a gateway refund fails stays, so money is never lost | `FinalizeCreditNote` |
+| Rule | Enforced in | Description |
+| --- | --- | --- |
+| **Payment currency matches invoice** | Payment Service | Payments are accepted strictly in the invoice's final currency (`invoice.currency`). |
+| **Credit note currency matches invoice** | `CreditNoteService` | Credit notes are issued in the invoice's currency with standard limits. |
+| **Prepaid wallet refund target rejected** | `FinalizeCreditNote` | On converted invoices, `PREPAID_WALLET` target is rejected. Must use `BACK_TO_SOURCE` (§3.6). |
 
 ### 5.7 Integrations
 
-| Rule | Enforced in |
-| --- | --- |
-| **Sync in the invoice's own currency, with its frozen rate.** Nothing converts during sync. The ERP customer must be in the invoice currency (§7.2). If it is not, and a new ERP customer in that currency cannot be created, the sync fails and names the currency | Zoho and QuickBooks invoice sync |
-
-### 5.8 Wallets across the rate (Releases 2 and 3)
-
-| Rule | Enforced in |
-| --- | --- |
-| **A top-up that will convert needs a rate up front.** No pending transaction is written otherwise | `TopUpWallet` |
-| **The saved rate on a block is written once.** Copied from the invoice when the purchase completes. Never recalculated or edited | `CompletePurchasedCreditTransaction` |
-| **Cash refunds go purchased first, then granted.** Purchased at the saved rate, granted at the rate looked up now. If granted credits need a rate and none exists, the refund is rejected before any block is debited | `RefundCredits` |
-| **Out-of-band refunds settle only through the settle endpoint.** They are created only when no top-up payment has capacity left | Refund service |
-| **Refund credit notes into a wallet use the invoice's pair, looked up at refund time.** Divide by the forward rate. No rate means rejected, unless the target is `BACK_TO_SOURCE` | `settleToWallet` |
-| **A failed gateway refund on a converted invoice falls back to the charge-currency wallet.** Through the rule above | `refundToWalletAsFallbackToFailure` |
-| **Migration targets the billing currency only.** One active postpaid wallet per currency. A rate is required when the currencies differ. The source is closed fully in one transaction | Migrate endpoint |
-| **The balance estimate is display only.** Calculated on read, never saved, never used in any calculation | Wallet balance API |
-
-The PRD's "write off wallet dust" case does not come up here. Credits reduce usage in the charge
-currency with no rate involved, and the only rounding from a rate happens on the invoice, where
-`ConvertInvoice` absorbs it (§3.4). Tiny wallet leftovers are handled by the existing debit logic.
+| Rule | Enforced in | Description |
+| --- | --- | --- |
+| **Sync with frozen invoice rate** | ERP Invoice Sync | Outbound ERP sync sends `invoice.currency` and uses `fx_conversion.rate` (§7.1). |
 
 ---
 
@@ -1019,7 +669,7 @@ POST   /v1/fx-rates              create                                   write
 GET    /v1/fx-rates              list — from, to, scope, scope_id, status read
 POST   /v1/fx-rates/search       filter body, paginated                   read   (@x-scope "read")
 GET    /v1/fx-rates/:id          get                                      read
-PUT    /v1/fx-rates/:id          replace — archives :id, returns new row  write
+PUT    /v1/fx-rates/:id          update rate, validity dates, metadata, or status  write
 DELETE /v1/fx-rates/:id          archive, see §5.1                        delete
 GET    /v1/fx-rates/resolve      from, to, customer_id?, subscription_id? read
 ```
@@ -1027,8 +677,8 @@ GET    /v1/fx-rates/resolve      from, to, customer_id?, subscription_id? read
 ```jsonc
 // POST /v1/fx-rates
 {
-  "scope": "customer",                 // environment | customer | subscription
-  "scope_id": "cust_01J…",             // omitted for environment
+  "scope": "customer",                 // tenant | customer | subscription
+  "scope_id": "cust_01J…",             // "tenant" for tenant scope
   "from_currency": "usd",
   "to_currency": "inr",
   "rate": "83.000000",
@@ -1038,20 +688,20 @@ GET    /v1/fx-rates/resolve      from, to, customer_id?, subscription_id? read
 {
   "id": "fxr_01J…", "scope": "customer", "scope_id": "cust_01J…",
   "from_currency": "usd", "to_currency": "inr", "rate": "83",
-  "status": "published", "superseded_by_id": null,
+  "status": "published", "valid_from": null, "valid_to": null,
   "created_at": "…", "updated_at": "…", "metadata": { … }
 }
 
-// PUT /v1/fx-rates/fxr_01J…   { "rate": "85" }
-// 200 → the NEW row. The old row is archived with superseded_by_id set.
+// PUT /v1/fx-rates/fxr_01J…   { "rate": "85.000000" }
+// 200 → returns updated fx_rates record.
 
 // GET /v1/fx-rates/resolve?from=usd&to=inr&customer_id=cust_01J…&subscription_id=subs_01J…
 // 200
 { "rate": "83", "rate_id": "fxr_01J…", "scope": "customer", "from_currency": "usd", "to_currency": "inr" }
 // 404
 { "error": "no FX rate configured for usd → inr",
-  "hint": "Set a rate for usd → inr at the subscription, customer or environment level",
-  "details": { "scopes_tried": ["subscription:subs_01J…", "customer:cust_01J…", "environment:env_01J…"] } }
+  "hint": "Set a rate for usd → inr at the subscription, customer or tenant level",
+  "details": { "scopes_tried": ["subscription:subs_01J…", "customer:cust_01J…", "tenant:tenant"] } }
 
 // DELETE that would strand a subscription → 409
 { "error": "fx rate fxr_01J… is still required",
@@ -1059,7 +709,7 @@ GET    /v1/fx-rates/resolve      from, to, customer_id?, subscription_id? read
 ```
 
 `resolve` shows which rate a customer will actually get, using the same function as finalize.
-Webhooks: `fx_rate.created`, `fx_rate.updated` (the new row, with `supersedes`), `fx_rate.deleted`,
+Webhooks: `fx_rate.created`, `fx_rate.updated`, `fx_rate.deleted`,
 registered in `internal/types/webhook.go` with payload builders in
 `internal/webhook/payload/factory.go`.
 
@@ -1070,10 +720,16 @@ registered in `internal/types/webhook.go` with payload builders in
 { "billing_currency": "inr" }            // null clears it
 // Customer response
 { "id": "cust_…", "billing_currency": "inr", … }
-// 400 when a subscription has no rate
+// 400 when a subscription or wallet has no rate
 { "error": "billing currency cannot be set to inr",
-  "hint": "No FX rate configured for usd → inr (subscription subs_01J…). Set a rate first.",
-  "details": { "missing": [ { "from": "usd", "to": "inr", "subscription_id": "subs_01J…" } ] } }
+  "hint": "No FX rate configured for usd → inr. Set required rates first.",
+  "details": {
+    "missing": [
+      { "from": "usd", "to": "inr", "subscription_id": "subs_01J…" },
+      { "from": "eur", "to": "inr", "wallet_id": "wal_01J…" }
+    ]
+  }
+}
 ```
 
 ```jsonc
@@ -1105,7 +761,15 @@ registered in `internal/types/webhook.go` with payload builders in
     "rounding_adjustment": "0"
   },
   "line_items": [
-    { "amount": "8300.00", "currency": "inr" }   // unchanged shape; converted at the invoice's rate
+    {
+      "id": "ili_…",
+      "display_name": "Token Usage - $0.05/token",
+      "quantity": "100.00",
+      "amount": "8300.00",
+      "currency": "inr",
+      "original_amount": "100.00",     // populated on converted invoices; null otherwise
+      "original_currency": "usd"
+    }
   ]
 }
 
@@ -1125,9 +789,9 @@ previews.
 
 | Surface | Shows | How |
 | --- | --- | --- |
-| `GET /v1/invoices/:id`, list, search | `fx_conversion` on the invoice | `InvoiceResponse` gains the field. Line item responses do not change |
+| `GET /v1/invoices/:id`, list, search | `fx_conversion` on invoice, and `original_amount` / `original_currency` on line items | `InvoiceResponse` and `InvoiceLineItemResponse` gain the fields |
 | Invoice webhooks: `invoice.update.finalized`, `invoice.update.payment`, `invoice.update.voided`, `invoice.update` | Same block | The payload builder wraps the `GetInvoice` response ([payload/invoice.go:27-72](../../internal/webhook/payload/invoice.go#L27)), so no builder change |
-| Invoice PDF | The original amount and the rate, for example *"₹8,300.00 (converted from $100.00 at 83.00)"*, and a note naming the pair | `pdf.InvoiceData` ([domain/pdf/model.go:11](../../internal/domain/pdf/model.go#L11)) gains `ChargeCurrency`, `FXRate`, `SourceSubtotal`, `SourceNet`, filled where the builder maps totals ([invoice.go:3147-3186](../../internal/ee/service/invoice.go#L3147)). Shown only when `FXRate` is set |
+| Invoice PDF | Converted amounts with original charge details (e.g. ₹8,300.00 converted from $100.00 @ 83.00) at summary and line level | Reads `line.original_amount` and `line.original_currency` directly for lines; reads `fx_conversion` for totals — zero reverse-math |
 | Customer portal | Same as the PDF | Reads the API |
 | Zoho, QuickBooks | Invoice in its own currency with `exchange_rate` = the frozen rate | §7.1 |
 
@@ -1142,19 +806,7 @@ and update, `"delete"` on delete.
 
 ### 6.5 Wallets
 
-```
-Release 1 top-up block removed             buying credits for a wallet in another currency is allowed
-POST    /v1/wallets/:id/top-up             response gains invoice.fx_conversion and the converted total
-GET     /v1/wallets/:id/transactions       rows gain fx_conversion
-GET     /v1/wallets/:id/balance/real-time  gains billing_currency_estimate
-POST    /v1/wallets/:id/refund             NEW: cash refund of unused credits, purchased and granted (§4.4)
-POST    /v1/refunds/:id/settle             NEW: mark an OUT_OF_BAND refund row as settled (§4.4)
-POST    /v1/wallets/:id/migrate            NEW: prepaid to postpaid (§4.6)
-POST    /v1/credit-notes … refund_target   PREPAID_WALLET accepted on converted invoices (§4.2)
-```
-
-Webhooks: `wallet.transaction.created` payloads include `fx_conversion`. `refund.created` and
-`refund.succeeded` keep their shape. No new event types.
+No new wallet API endpoints are introduced. Wallet operations (`TopUpWallet`, `GetBalance`, etc.) retain their existing request/response contracts (§4).
 
 ---
 
@@ -1182,10 +834,10 @@ On `feat/fx-rates`, Zoho and QuickBooks already receive the invoice currency and
 the ERP itself (Zoho `settings/currencies`, QuickBooks `exchangerate`). After this change a converted
 invoice sends its own frozen rate:
 
-```
-invoice.fx_conversion is set  → exchange_rate = fx_conversion.rate    (Zoho exchange_rate, QBO ExchangeRate)
-otherwise                     → ERP's own rate, as today              (invoices never converted)
-```
+| Invoice State | Outbound Rate Sent to ERP | ERP Field Target |
+| --- | --- | --- |
+| Converted (`fx_conversion` is set) | `fx_conversion.rate` (frozen rate) | Zoho: `exchange_rate`<br/>QuickBooks: `ExchangeRate` |
+| Unconverted (`fx_conversion` is `NULL`) | ERP's own currency rate (existing behaviour) | Native ERP rate lookup |
 
 One branch in `ResolveInvoiceCurrency` (Zoho) and one around `GetExchangeRate` (QuickBooks). The
 fallback is required: no invoice that exists today has `fx_conversion`.
@@ -1198,13 +850,11 @@ first converted invoice.
 
 With `currency` on the mapping (§2.5), invoice sync finds the ERP customer like this:
 
-```
-1. Mapping for (customer, provider, currency = invoice.currency)   → use it
-2. Otherwise an old mapping with currency = ''                     → read the ERP customer's currency
-       same as the invoice's → save the currency on the row, use it
-       different             → go to 3
-3. Otherwise create an ERP customer in invoice.currency and a mapping row with that currency
-```
+| Step | Lookup Condition | Resolution Action |
+| --- | --- | --- |
+| **1. Exact Currency Match** | `(customer_id, provider, currency = invoice.currency)` exists | Use existing mapped ERP customer entity. |
+| **2. Legacy Row Upgrade** | Legacy row exists with `currency = ''` | Query ERP customer currency. If it matches `invoice.currency`, stamp `currency` on the mapping row and use it. If different, proceed to Step 3. |
+| **3. Create New Mapping** | No compatible ERP customer found | Create new ERP customer (e.g. *"Acme Corp (INR)"*) and insert new mapping record for `invoice.currency`. |
 
 - Old rows are upgraded as they are used, and nothing is posted to the wrong currency.
 - The new ERP customer's name includes the currency, for example *"Acme Corp (INR)"*.
@@ -1234,8 +884,8 @@ this is added.
 | No rate at any scope at finalize | Finalize fails, draft stays, error names the pair and scopes, logged at `Error`, not retried by Temporal. Rare, because subscription create, billing-currency change and rate delete all check first |
 | No rate at subscription create, billing-currency change or one-off create | Rejected before anything is written, naming the pair |
 | A non-zero net converts to zero | `ErrInternal`: the rate is too small for the billing currency's precision. Finalize fails |
-| Rate replaced while a draft is open | The draft uses the rate live at its finalize. Checkout drafts keep the rate shown to the customer |
-| Rate replaced after finalization | No effect. The invoice has its own copy |
+| Rate updated while a draft is open | The draft resolves the rate active at its finalize. Checkout drafts keep the rate shown to the customer |
+| Rate updated after finalization | No effect. The invoice has its own frozen copy in `fx_conversion` |
 | Finalize retried after conversion | `fx_conversion` is set, so it is reused. Never looked up or converted again |
 | Void of a converted invoice | Prepaid credits returned in the charge currency from the saved amounts. Paid part in the billing currency |
 | Finalized converted invoice recalculated | Voided and replaced by a new charge-currency draft that converts at its own finalize |
@@ -1265,7 +915,7 @@ Extend `invoice_test.go`, `subscription_test.go`, `customer_test.go`, `wallet_te
 | Case | Expected |
 | --- | --- |
 | `from == to` | Rate 1, no query |
-| Environment rate only | Found at environment scope |
+| Tenant rate only | Found at tenant scope |
 | Environment and customer rates | Customer rate wins |
 | Environment, customer and subscription rates | Subscription rate wins |
 | Only an archived row | Not found |
@@ -1307,10 +957,8 @@ Extend `invoice_test.go`, `subscription_test.go`, `customer_test.go`, `wallet_te
 | Subscription create, different currency, no rate | Rejected, pair named |
 | Same with `fx_rate` in the request | Created; subscription-level rate exists |
 | Set billing currency, an active subscription has no rate | Rejected, all missing pairs listed |
-| Set billing currency, funded postpaid wallet in another currency | Rejected |
-| Create postpaid wallet not in the billing currency | Rejected |
-| Purchased top-up on a USD prepaid wallet, INR billing | Rejected in Release 1 |
-| Auto top-up on the same wallet | Skipped with an Info log; alert still recorded; no error |
+| Set billing currency, customer has a wallet with no rate | Rejected, missing pair named |
+| Create wallet in any currency | Allowed without restriction |
 | One-off with `amount_paid > 0`, customer billed in another currency | Rejected at creation |
 | Offline payment on a USD draft of a customer billed in INR | Rejected |
 | Delete the only rate a live subscription needs | 409 listing the subscription. Deleting an overridden rate works |
@@ -1321,7 +969,7 @@ Extend `invoice_test.go`, `subscription_test.go`, `customer_test.go`, `wallet_te
 | --- | --- |
 | Adjustment credit note on a converted invoice | INR; `amount_due` reduced in INR; limit checked in INR |
 | Refund credit note, `BACK_TO_SOURCE`, invoice paid ₹8,300 | One INR gateway row for ₹8,300; no rate looked up |
-| Refund credit note to a wallet on a converted invoice | Rejected in Release 1 |
+| Refund credit note with `PREPAID_WALLET` on a converted invoice | Rejected; customer instructed to use `BACK_TO_SOURCE` |
 | Line with `source_amount: 50.00`, invoice converted at 83 | Saved `amount` ₹4,150.00 from the frozen rate, even if the live rate is now 85 |
 | `source_amount` that converts to more than the line's INR amount | Rejected by the existing per-line limit |
 | Credit note response | Includes the invoice's `fx_conversion`; nothing new saved |
@@ -1335,111 +983,43 @@ Extend `invoice_test.go`, `subscription_test.go`, `customer_test.go`, `wallet_te
 | Customer mapped in USD, INR invoice | New ERP customer created and mapped with `currency = inr` |
 | Old mapping whose ERP currency matches the invoice | Currency saved on the row, mapping reused |
 
-### 9.8 Buying credits
+### 9.8 Buying credits and wallet interactions
 
 | Case | Expected |
 | --- | --- |
-| Customer billed in INR buys $300 for a USD wallet, rate 100 | INR invoice for ₹30,000 with `fx_conversion`; wallet +$300; block saved with rate 100, paid 30,000, INR |
-| Same, pay-first checkout | Payment link in INR for ₹30,000; rate fixed at session creation; wallet +$300 after payment |
-| Same, no rate | Top-up rejected before any transaction is written |
-| Same-currency top-up (INR wallet, INR billing) | No `fx_conversion`, no saved rate, unchanged path |
-| $330 of usage against the $300 wallet at cycle end | $300 debited before conversion; $30 converts to ₹3,000; total paid ₹33,000 (PRD example) |
+| Customer billed in INR buys $300 for a USD wallet, rate 100 | Top-up invoice created for ₹30,000 in INR with `fx_conversion`; after payment, wallet is credited with +$300 (no rate saved on wallet transaction) |
+| Same, pay-first checkout | Payment link in INR for ₹30,000; draft converted at checkout session creation; wallet +$300 credited upon successful payment |
+| Same, no rate | Top-up invoice finalization fails; wallet untouched |
+| Same-currency top-up (INR wallet, INR billing) | No conversion, normal path |
+| $330 of usage against $300 prepaid USD wallet at cycle end | $300 debited in USD before conversion; remaining $30 converts at active rate to INR; invoice issued in INR |
+| Credit note on converted invoice with `BACK_TO_SOURCE` | Refund row created in INR against the original INR payment; gateway refunds INR |
+| Credit note on converted invoice with `PREPAID_WALLET` | Rejected; customer instructed to use `BACK_TO_SOURCE` |
+| Gateway refund fails on converted invoice | Fallback creates/credits a billing-currency (INR) wallet as today |
 
-### 9.9 Wallet refunds
-
-| Case | Expected |
-| --- | --- |
-| Refund 200 of the 300 purchased credits | ₹20,000 refund row against the top-up payment; wallet −$200 (PRD example) |
-| Two purchases at rates 100 and 110, refund covers both | Newest block at 110, the rest at 100; two refund rows |
-| Granted block only, current rate 83, a top-up payment with capacity exists | INR value at 83 as a `GATEWAY` row against that payment |
-| Granted block only, no top-up payment | One `OUT_OF_BAND` row, `payment_id = NULL`, pending until settled |
-| Granted block, no rate | Rejected before any debit |
-| Purchased and granted blocks, refund covers both | Purchased first at its saved rate, granted at today's rate; two rows |
-| Refund credit note into a wallet, ₹8,300 invoice frozen at 83, current rate 83 | $100 credited |
-| Same, current rate replaced by 85 | ₹8,300 ÷ 85 credited; metadata records 85 |
-| Same, no rate | Rejected unless `BACK_TO_SOURCE` |
-| Gateway refund fails on a converted invoice | Fallback lands in the USD wallet at the §4.2 rate |
-
-### 9.10 Balance and migration
+### 9.9 Regression
 
 | Case | Expected |
 | --- | --- |
-| Balance read, USD wallet, INR billing | Estimate equals balance × rate. Not returned when there is no billing currency or it matches |
-| Move $212.40 prepaid into an INR postpaid wallet at 83 | Source closed at 0; target ₹17,629.20; one transaction |
-| Same, an INR postpaid wallet already exists | Rejected |
-| Move with no rate | Rejected naming the pair; nothing changed |
-
-### 9.11 Regression
-
-| Case | Expected |
-| --- | --- |
-| All invoice conversion tests (§9.1 to §9.7) | Still pass. Wallet work must not touch the finalize path |
-| Customer with no billing currency, any wallet endpoint in §4 | Behaves as today; refunds and moves use a rate of 1 |
+| Invoices where customer has no `billing_currency` | Behaves exactly as today; invoice currency equals charge currency |
+| Rate updated while drafts exist | Unfinalized drafts finalize using the active rate at finalization time; finalized invoices are unchanged |
 
 ---
 
-## 10. Migration and rollout
-
-### 10.1 Migration
+## 10. Database migration
 
 | Step | Change | Reversible |
 | --- | --- | --- |
-| 1 | `CREATE TABLE fx_rates` with `Idx_fx_rate_live_key` (partial, `status = 'published'`) and `Idx_fx_rate_pair` | Yes. Nothing reads it |
+| 1 | `CREATE TABLE fx_rates` with `idx_fx_rate_tenant_live` (partial unique: `status = 'published' AND scope = 'tenant'`) and `Idx_fx_rate_override` (non-unique, for customer/subscription lookups). No `superseded_by_id` column | Yes. Nothing reads it |
 | 2 | `ALTER TABLE customers ADD COLUMN billing_currency varchar(10) NULL` | Yes. Nullable and unused until set |
 | 3 | `ALTER TABLE invoices ADD COLUMN fx_conversion jsonb NULL` | Yes |
 | 4 | `ALTER TABLE entity_integration_mappings ADD COLUMN currency varchar(10) NOT NULL DEFAULT ''`, and recreate the unique index with it. Ent does not drop the old index, so write the drop by hand as `V5__settings_unique_published_only.up.sql` did | Yes |
-| 5 | `ALTER TABLE wallet_transactions ADD COLUMN fx_conversion jsonb NULL`. Ships with Release 2 | Yes |
+| 5 | `ALTER TABLE invoice_line_items ADD COLUMN original_currency varchar(10) NULL, ADD COLUMN original_amount numeric(20,8) NULL` | Yes. Nullable and unused until conversion |
 | 6 | Deploy the code. Nothing changes for any customer until a `billing_currency` is set | Setting a billing currency is what changes that customer's next invoice |
 
 Run `make generate-ent` and `make generate-migration`, then check the SQL is only additive statements
 and one index swap. Build the new unique index with `CREATE UNIQUE INDEX CONCURRENTLY` before
 dropping the old one. `ADD COLUMN … NULL` does not rewrite the table in Postgres, so nothing locks
 `customers` or `invoices` for long.
-
-### 10.2 Releases
-
-| Release | Ships | Delivers |
-| --- | --- | --- |
-| **1. Invoice conversion** | Billing currency, `fx_rates`, conversion at finalize, guardrails, API, PDF, ERP sync. Blocks cross-currency top-ups and refund-to-wallet on converted invoices | Every invoice in the billing currency |
-| **2. Wallet gaps closed** | Top-ups across the rate with the rate saved on the block (§4.1), refund credit notes into a wallet (§4.2), fallback fix (§4.3). Removes both Release 1 blocks | The full PRD |
-| **3. Later** | Cash refund of unused credits (§4.4), balance estimate (§4.5), prepaid to postpaid move (§4.6) | PRD extras, not needed at launch |
-
-Release 1 changes only the invoice path, which is where the risk is. Release 2 is the first time a
-customer's wallet and their payment are in different currencies, so it gets its own test pass and
-release note. Release 3 items are new endpoints that nothing depends on.
-
-**Release 1 PRs, in order**
-
-1. **Types, schema, migration.** `FXRateScope`, `FXConversion`, `UUID_PREFIX_FX_RATE`,
-   `EntityFXRate`; schema changes; repository field lists and in-memory stores; round-trip tests.
-   No behaviour change.
-2. **FX rate service, repository, API.** CRUD, replace, `resolve`, the §5.1 rules, webhooks, RBAC.
-3. **Customer billing currency.** DTO field, the §5.2 rules, `customer.updated` payload.
-4. **Conversion.** `ConvertInvoice` and its tests; finalize steps 4 to 6; tax for converted invoices;
-   `billing_currency_estimate`; the §5.4 rules.
-5. **Subscription create check and inline rate.** The §5.3 rules and the `billing` block.
-6. **Checkout drafts.** Convert at session creation; freeze converted drafts.
-7. **Wallet and refund blocks.** §5.5 and §5.6.
-8. **Display.** PDF template and portal read `fx_conversion`.
-9. **Integration sync.** §7. Merge `feat/fx-rates` first, since this builds on it.
-10. **SDKs and dashboard.** Run `make swagger` and `make sdk-all` after PRs 2, 3 and 4. Dashboard:
-    rate list with a scope picker, `resolve` preview, billing-currency field that shows missing pairs
-    as a list, and a draft banner from `billing_currency_estimate`.
-
-PRs 1 to 3 can go to production before PR 4. They change nothing on their own and let tenants set up
-rates early. PR 4 is the release.
-
-**Release 2 PRs:** saved rate on credit blocks; remove the top-up block and add the top-up rate
-check; refund credit notes into a wallet and the fallback fix.
-
-**Release 3 PRs:** balance estimate; cash refund endpoint; prepaid to postpaid move. Each is
-independent.
-
-**Release note for Release 2:** this is the first release where a customer's wallet and their payment
-are in different currencies. Point confused customers to the top-up invoice line that reads
-*"$300.00 of credits at 100.00"*.
-
----
 
 ## 11. Decisions log
 
@@ -1449,83 +1029,18 @@ are in different currencies. Point confused customers to the top-up invoice line
 | Convert after prepaid credits and discounts, before tax | Credits are used in the currency they are held in, so only the remainder crosses the rate. Tax must be in the invoice currency for GST and for the `tax_applied` rows sent to ERPs |
 | Checkout drafts convert at session creation | The customer pays before finalize, so the price shown must already be in the billing currency and must not move |
 | Convert the net once; the largest line absorbs rounding | Lines always add up to the total, so the PDF, portal and ERPs match. Same rule as `calculateTaxBreakdown` |
-| `fx_conversion` on the invoice only | All lines share one rate, and every reader uses the invoice. A line's original can be shown as `amount ÷ rate` |
+| `fx_conversion` on invoice, original amounts on line items | The invoice carries the frozen rate snapshot, while each line item preserves its pre-conversion amount and currency directly for exact display and PDF rendering without rounding drift |
 | A jsonb column, not an `fx_rates_applied` table | Every reader reads the invoice. Nothing in the PRD converts a payment or a usage record. Same shape as `custom_currency` |
 | Separate from `custom_currency` | Custom currency is set at draft creation and keeps the invoice fiat. FX changes the invoice currency at finalization. Merging would put a live second currency on every draft |
 | One `fx_rates` table with three scopes | One lookup path, and `resolve` returns exactly what finalize uses. A tenant default in `settings` plus overrides in a table would need two lookups and a merge |
 | No effective dates on rates | The PRD uses fixed rates. History is in archived rows and on each invoice. Dates can be added later without changing the lookup |
-| Rates are replaced, never edited | We always know which rate was live when, and a change cannot reach a finalized invoice |
+| Rates are directly editable in `fx_rates` | `fx_rates` is a purely transactional table; audit is decoupled. Finalized invoices are protected by freezing their conversion snapshot in `invoice.fx_conversion`, so editing a rate never alters historical billing data |
 | `numeric(24,12)` for the rate | Holds both 25,000 (USD→VND) and 0.00004 (VND→USD). Existing rate columns are too narrow |
 | No live-rate or feed columns | Out of scope. A feed later changes the lookup, not the table |
 | Rates looked up at conversion time, not copied onto customers or subscriptions | Replacing the environment rate reaches every customer without an override. The tax engine copies at creation and cannot do this |
 | No reverse-pair lookup | Tenants set each direction on purpose. Inverting rounds and may not match what finance agreed |
 | Back-to-source refunds use no rate | The invoice, payment and credit note are all INR, and the gateway returns what it captured. A new rate could ask for more than was paid. While rates are fixed, this matches the PRD's wording |
-| Invoice conversion leaves prepaid wallets unchanged | Credits are applied before conversion, so no wallet code needs to convert. Flows where money crosses the rate through a wallet ship in Release 2 |
-| One ERD, three releases | Wallet work reuses the invoice schema and rate lookup, so it is one design. Releases separate risk, not design |
-| No "prepaid wallet not allowed" rule for customers billed in another currency | It would remove credit grants, immediate downgrade credits and wallet refunds for them, without reducing risk. Can be added as one extra check if the team wants it |
+| A wallet balance is never converted | Credits go in and out in the wallet's own currency. Cross-currency top-ups convert via the top-up invoice, and credits reduce usage before conversion |
 | Per-currency ERP customer only for converted invoices | Existing invoices and customers keep today's sync behaviour |
-| A wallet balance is never converted | $100 of credit always buys $100 of usage. The rate applies only to money entering or leaving the wallet |
-| Save the purchase rate on the credit block | The PRD refunds unused credits at the rate they were bought at. The block is the only place that knows it |
-| Granted credits can be refunded as cash, at today's rate (decided 2026-09-26) | Nobody paid for them, so there is no purchase rate. Today's configured rate is the value the tenant gives back |
-| Purchased credits are refunded before granted ones | Purchased credits have a payment behind them, so they can go back through the gateway |
-| Remainder beyond payment capacity goes `OUT_OF_BAND` | Sending a cash refund back into the wallet would defeat its purpose |
-| Refund credit notes divide by the forward rate | The refund reverses the invoice's conversion, so it uses the same pair. A reverse lookup would force tenants to configure both directions, and the two might not match |
-| New reasons `WALLET_REFUND` and `WALLET_MIGRATION` | A refund, a move and a write-off must be distinguishable in the ledger |
-| Saved rates are not carried into a postpaid wallet | After the move the balance is in the billing currency, so its refunds need no rate |
 
 ---
-
-## 12. Open questions
-
-1. **Tax reference rate.** Indian GST may require the INR value on an invoice to use a government
-   reference rate instead of the commercial rate. If so, `FXConversion` gets a `reference_rate`,
-   finalize step 8 uses it for the taxable base, and the commercial rate still sets `amount_due`. The
-   schema allows it; the PDF layout would need a new line. Needs a finance contact at a launch
-   customer before Release 2.
-2. **`auto_invoice_threshold`** is compared with unbilled usage in the charge currency, which is
-   correct. Its API docs should say it is not in the billing currency.
-3. **Gateway customers.** Razorpay and Stripe can take a payment in any supported currency. Stripe
-   Billing customers lock their currency, but Flexprice, not Stripe Billing, drives payments for
-   converted invoices. Confirm this for the checkout and saved-card flows.
-4. **Analytics.** Revenue analytics add `TotalCost` across items without checking currency and label
-   the sum with the first subscription's currency. This feature neither fixes nor worsens that. A
-   reporting currency using `fx_rates` is the later fix.
-5. **Plan change v1 excess credit.** `OpeningInvoiceAdjustmentAmount` applies only to fixed lines and
-   logs any excess ([billing.go:309-321](../../internal/ee/service/billing.go#L309)). Not related to
-   FX; noted so it is not blamed on conversion.
-6. **Who can call the cash refund endpoint, and can gateways refund part of an old payment?**
-   Razorpay and Chargebee have refund adapters. Stripe and Moyasar do not (refund ERD §8.7), so a
-   refund there falls back to the wallet, which defeats the purpose. The endpoint may need to be
-   limited to supported gateways at launch.
-7. **Refunding granted credits against a purchase payment.** A `GATEWAY` row for a granted block
-   partly refunds a top-up payment whose purchased credits may already be used, so the books show
-   "refunded ₹4,150 of top-up invoice X". If finance prefers to keep granted refunds off purchase
-   payments, every granted refund goes `OUT_OF_BAND`. A `funding` flag on the endpoint
-   (`topup_payments` or `out_of_band`) supports both. The default needs confirmation from the launch
-   customer's finance contact.
-8. **Estimate rate scope.** The balance estimate uses customer or environment scope, because a wallet
-   is not tied to one subscription. A customer with only subscription-level rates sees an estimate at
-   a different rate from their invoices. Acceptable for a display value; say so in the API docs.
-
----
-
-## 13. References
-
-| Topic | Location |
-| --- | --- |
-| Finalize path | [`performFinalizeInvoiceActions`, invoice.go:1057-1216](../../internal/ee/service/invoice.go#L1057) |
-| Prepaid credits at finalize | [invoice.go:1121-1141](../../internal/ee/service/invoice.go#L1121); [`ApplyCreditsToInvoice`, credit_adjustment.go:207-345](../../internal/ee/service/credit_adjustment.go#L207); [`GetWalletsForCreditAdjustment`, wallet_payment.go:221-259](../../internal/ee/service/wallet_payment.go#L221) |
-| Postpaid wallet payments | [`GetWalletsForPayment`, wallet_payment.go:124-218](../../internal/ee/service/wallet_payment.go#L124) |
-| Draft creation | [`CreateEmptyDraftInvoice`, invoice.go:185-343](../../internal/ee/service/invoice.go#L185) |
-| Checkout drafts | [`CreateComputedDraftInvoice`, invoice.go:391](../../internal/ee/service/invoice.go#L391) |
-| Void refund amount | [invoice.go:1444-1452](../../internal/ee/service/invoice.go#L1444); [`PrepareRefundsForVoidedInvoice`, refund.go:84](../../internal/ee/service/refund.go#L84) |
-| Refund to wallet or source | [refund.go:286-392](../../internal/ee/service/refund.go#L286); [`EnsurePrepaidWallet`, wallet.go:295](../../internal/ee/service/wallet.go#L295) |
-| Proration credit wallet | [`TopUpWalletForProratedCharge`, wallet.go:3103-3210](../../internal/ee/service/wallet.go#L3103); [`Settle`, line_item_proration.go:280-347](../../internal/ee/service/line_item_proration.go#L280) |
-| Subscription create checks | [`createSubscription`, subscription.go:74-140](../../internal/ee/service/subscription.go#L74) |
-| Wallet balance | [`GetWalletBalance`, wallet.go:1697-1840](../../internal/ee/service/wallet.go#L1697); [`GetUnpaidInvoicesToBePaid`, invoice.go:2617-2708](../../internal/ee/service/invoice.go#L2617) |
-| Custom currency | [`internal/types/custom_currency.go`](../../internal/types/custom_currency.go); [`model.go:302-398`](../../internal/domain/invoice/model.go#L302); [design](2026-08-27-FLE-1201-tenant-custom-currency.md) |
-| Currency helpers | [`currency.go:85` `IsMatchingCurrency`, `:93` `ValidateCurrencyCode`, `:137` `RoundToCurrencyPrecision`](../../internal/types/currency.go#L85) |
-| Partial unique index example | [`ent/schema/settings.go:59-61`](../../ent/schema/settings.go#L59); [`V5__settings_unique_published_only.up.sql`](../../migrations/postgres/V5__settings_unique_published_only.up.sql) |
-| Router example | [router.go:527-545](../../internal/api/router.go#L527) |
-| ERP mapping key | [entityintegrationmapping.go:71-76](../../ent/schema/entityintegrationmapping.go#L71) |
-| Zoho / QuickBooks currency on `feat/fx-rates` | `zoho/client.go` `ResolveInvoiceCurrency`; `quickbooks/client.go` `GetExchangeRate`; `quickbooks/customer.go` `SyncCustomerToQuickBooks` |
