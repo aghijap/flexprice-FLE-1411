@@ -591,7 +591,8 @@ flowchart TD
 - A custom-currency subscription never uses `fx_rates`, and an `fx_rate` in its request is rejected.
 - The same check runs before a checkout session opens, so a customer is never shown a price that
   cannot be invoiced.
-- Subscription currency cannot change. Plan change keeps the same currency.
+- Subscription currency cannot change. Plan change requires a target plan in the same currency. To
+  move a customer to a plan in another currency, cancel the subscription and create a new one.
 - Plan changes, addons and proration need no new check. Their invoices convert at finalize.
 
 ### 8.4 Invoices
