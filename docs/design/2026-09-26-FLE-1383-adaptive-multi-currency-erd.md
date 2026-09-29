@@ -754,31 +754,7 @@ before conversion is switched on.
 
 ---
 
-## 13. Decisions log
-
-| Decision | Rationale |
-| --- | --- |
-| Draft stays in the charge currency; convert once at finalize | Compute, coupons, credits and previews need no change, and a draft never carries two currencies |
-| Convert after credits and discounts, before tax | Credits are used in their own currency, and tax must be in the invoice currency |
-| Checkout drafts convert at session creation | The customer pays before finalize, so the price shown must already be in INR and must not move |
-| Convert the net once; the largest line absorbs rounding | Lines always add up to the total, so PDF, portal and ERPs match. Same rule as tax breakdowns |
-| Rate snapshot on the invoice, original amounts on lines | The invoice holds one rate for all lines; lines keep exact originals for display |
-| jsonb snapshot, not an applied-rates table | Every reader reads the invoice. Same shape as `custom_currency` |
-| Separate from `custom_currency` | Custom currency applies at draft creation, FX at finalize. Merging would put a live second currency on every draft |
-| One `fx_rates` table with three scopes | One lookup path, so `resolve` matches finalize exactly |
-| Validity windows on overrides only | Negotiated customer rates are often time-bound; the tenant default is not. Keeps the tenant rate a single row |
-| Rates are editable in place | Finalized invoices keep their own frozen rate, so editing never changes billed history |
-| Resolve at conversion time, not copied onto customers | Updating the tenant rate reaches every customer without an override |
-| No reverse-pair lookup | Each direction is a deliberate commercial rate; inverting can disagree with what finance agreed |
-| `numeric(24,12)` | Holds both 25,000 (USD→VND) and 0.00004 (VND→USD) |
-| No live-rate feed | Out of scope. A feed later changes the lookup, not the table |
-| Back-to-source refunds use no rate | The payment, invoice and credit note are all INR; the gateway returns what it took |
-| A wallet balance is never converted | $1 of USD credit always buys $1 of USD usage. Conversion happens only on invoices |
-| No FX data sent to ERPs | The invoice and the synced customer are both in the billing currency. The ERP's own rate to its base currency is unchanged |
-
----
-
-## 14. Open questions
+## 13. Open questions
 
 1. **Which date picks a time-limited rate?** Resolution uses the finalize time. An October invoice
    finalized on 1 November would use a November-only override. Should resolution use the invoice's
