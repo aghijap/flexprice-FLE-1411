@@ -210,7 +210,7 @@ to a parent, the parent's billing currency applies.
 | `rate` | `numeric(24,12)` | No | `to_currency` units per 1 `from_currency` unit |
 | `valid_from` | `timestamp` | Yes | Start of the window. Always NULL for tenant scope |
 | `valid_to` | `timestamp` | Yes | End of the window, exclusive. NULL means open-ended |
-| `status` | `varchar(20)` | No | `published` or `archived` |
+| `status` | `varchar(20)` | No | `published` or `archived`. Tenant rates are always `published` |
 | `metadata` | `jsonb` | Yes | Free-form, for example the contract reference |
 
 | Index | Columns | Type |
@@ -221,7 +221,9 @@ to a parent, the parent's billing currency applies.
 **Scope rules**
 
 - **Tenant rate.** The default for a currency pair across the tenant. No validity window. Exactly one
-  published row per pair.
+  row per pair. It cannot be deleted or archived once created, only its value can be updated.
+  Checking whether any subscription, draft or wallet still depends on it would mean scanning the
+  whole tenant, and every override falls back to it.
 - **Customer and subscription overrides.** Need a published tenant rate for the same pair. Can be
   permanent or limited to a `[valid_from, valid_to)` window. Several overrides may exist for one
   entity and pair as long as their windows do not overlap.
@@ -554,7 +556,8 @@ All checks run in the service layer. Errors name the currency pair and the IDs i
 | One tenant rate per pair | A second tenant rate for the same pair returns `409`. Update the existing one instead | Unique index, plus a pre-check for a clear error |
 | Override needs a tenant rate | A customer or subscription rate is rejected if no tenant rate exists for the pair | `FXRateService.Create` |
 | No overlapping override windows | Checked on create and update. A missing `valid_from` counts as the beginning of time and a missing `valid_to` as the end. Overlap returns `409` | `FXRateService.Create`, `FXRateService.Update` |
-| No delete that strands a subscription | Refused if a live subscription or open draft would be left with no rate. The error lists up to 20 of them | `FXRateService.Delete` |
+| Tenant rates cannot be removed | Delete, and any update that archives a tenant rate, are rejected. Only its `rate` and `metadata` can change | `FXRateService.Update`, `FXRateService.Delete` |
+| Overrides can be removed freely | Deleting a customer or subscription override is always safe, because the tenant rate for the pair always exists as the fallback | `FXRateService.Delete` |
 | Tenant and environment isolation | A staging rate never applies in production | Base mixins and query filters |
 
 ### 8.2 Setting a billing currency
@@ -647,8 +650,8 @@ permission, and `@x-scope` on every handler.
 | `GET` | `/v1/fx-rates` | List, filtered by pair, scope, scope_id, status |
 | `POST` | `/v1/fx-rates/search` | Filtered, paginated search |
 | `GET` | `/v1/fx-rates/:id` | Get one |
-| `PUT` | `/v1/fx-rates/:id` | Update rate, validity window, metadata or status |
-| `DELETE` | `/v1/fx-rates/:id` | Archive. Refused if it would strand a subscription |
+| `PUT` | `/v1/fx-rates/:id` | Update. Tenant rates: `rate` and `metadata` only. Overrides: also the validity window and status |
+| `DELETE` | `/v1/fx-rates/:id` | Archive an override. Tenant rates cannot be deleted |
 | `GET` | `/v1/fx-rates/resolve` | Show which rate a customer or subscription gets now. Same function as finalize |
 
 **Create a rate**
@@ -684,7 +687,7 @@ permission, and `@x-scope` on every handler.
 ```
 
 **Update a rate.** Send only the fields to change. `scope`, `scope_id` and the currency pair cannot
-change; create a new rate instead.
+change; create a new rate instead. A tenant rate accepts only `rate` and `metadata`.
 
 ```jsonc
 // PUT /v1/fx-rates/fxr_01J…
@@ -812,7 +815,7 @@ Wallet APIs are unchanged. Top-up, balance and transaction endpoints keep their 
 | No rate for a pair (`resolve`, subscription create, one-off invoice, checkout session) | 404 / 400 | The pair and every scope checked |
 | Setting a billing currency with missing rates | 400 | Every missing pair, with the subscription or wallet id |
 | Second tenant rate for a pair, or overlapping override windows | 409 | The existing rate id |
-| Deleting a rate that is still needed | 409 | Up to 20 dependent subscriptions or drafts |
+| Deleting or archiving a tenant rate | 400 | The rate id. Update its value instead |
 | Payment on an unconverted draft | 400 | The billing currency the invoice will be issued in |
 | Custom currency with no factor for the billing currency | 400 | The custom currency and the billing currency |
 | Changing the billing currency during an open checkout session | 400 | The open checkout session id |
@@ -823,7 +826,7 @@ Wallet APIs are unchanged. Top-up, balance and transaction endpoints keep their 
 
 | Failure | Behaviour |
 | --- | --- |
-| No rate at finalize | Invoice stays DRAFT, error names the pair, not retried. Rare, because subscription create, billing-currency changes and rate deletes check first |
+| No rate at finalize | Invoice stays DRAFT, error names the pair, not retried. Rare, because subscription create and billing-currency changes check first, and tenant rates cannot be removed |
 | Non-zero net converts to zero | Internal error: the rate is too small for the currency's precision. Finalize fails |
 | Rate edited while a draft is open | The draft uses the rate valid at its finalize. Checkout drafts keep the rate shown to the customer |
 | Rate edited after finalize | No effect. The invoice keeps its frozen rate |
