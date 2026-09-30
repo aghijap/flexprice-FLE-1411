@@ -4,6 +4,7 @@ import (
 	"github.com/flexprice/flexprice/internal/api/dto"
 	"github.com/flexprice/flexprice/internal/domain/customer"
 	"github.com/flexprice/flexprice/internal/domain/settings"
+	ierr "github.com/flexprice/flexprice/internal/errors"
 	"github.com/flexprice/flexprice/internal/types"
 	"github.com/flexprice/flexprice/internal/utils"
 	"github.com/samber/lo"
@@ -72,22 +73,21 @@ func (s *InvoiceServiceSuite) TestCreateDraftInvoice_CustomCurrencyUsesCustomerB
 	s.Nil(resp.FxConversion, "a custom-currency invoice converts once (custom->fiat); FX never applies")
 }
 
-// When the customer's billing currency has no factor for the custom code, the draft falls back to
-// the tenant default fiat (today's behaviour). The §8.2/§8.3 guardrails prevent this for
-// subscriptions and wallets; a stray one-off is caught by the finalize guard.
-func (s *InvoiceServiceSuite) TestCreateDraftInvoice_CustomCurrencyNoFactorFallsBackToDefault() {
+// A custom-currency invoice for a customer whose billing currency has no factor for the custom code
+// is rejected — never silently issued in the tenant default fiat (§5.5: "not allowed"). This is the
+// one-off safety net beyond the §8.2/§8.3 subscription/wallet guardrails; convertAndRetaxInvoice is a
+// no-op for custom-currency invoices, so there is no finalize-time guard to fall back on.
+func (s *InvoiceServiceSuite) TestCreateDraftInvoice_CustomCurrencyNoFactorRejected() {
 	s.seedCustomCurrencyConfig() // mac -> usd only
 	cust := s.seedCustomerWithBillingCurrency("cust_cc_nofactor", "inr")
 
-	resp, err := s.service.CreateEmptyDraftInvoice(s.GetContext(), dto.CreateDraftInvoiceRequest{
+	_, err := s.service.CreateEmptyDraftInvoice(s.GetContext(), dto.CreateDraftInvoiceRequest{
 		CustomerID:  cust.ID,
 		InvoiceType: types.InvoiceTypeOneOff,
 		Currency:    "mac",
 	})
-	s.NoError(err)
-	s.Equal("usd", resp.Currency, "no mac->inr factor: fall back to the tenant default fiat")
-	s.Require().NotNil(resp.CustomCurrency)
-	s.True(resp.CustomCurrency.Rate.Equal(decimal.NewFromFloat(0.1)), "rate is the default-fiat factor, got %s", resp.CustomCurrency.Rate)
+	s.Require().Error(err, "a custom-currency invoice with no factor for the billing currency must be rejected")
+	s.True(ierr.IsValidation(err), "must be a validation error, got %v", err)
 }
 
 // A custom-currency draft for a customer whose billing currency IS the tenant default is unchanged.
