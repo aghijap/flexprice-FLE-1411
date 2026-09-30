@@ -1,8 +1,10 @@
 package dto
 
 import (
+	"encoding/json"
 	"testing"
 
+	"github.com/flexprice/flexprice/internal/domain/invoice"
 	"github.com/flexprice/flexprice/internal/domain/taxapplied"
 	"github.com/flexprice/flexprice/internal/types"
 	"github.com/samber/lo"
@@ -238,4 +240,39 @@ func TestTaxExemptionReasonCode_DisplayLabel(t *testing.T) {
 
 	assert.Equal(t, "future_code", types.TaxExemptionReasonCode("future_code").DisplayLabel(),
 		"an unmapped code falls back to itself rather than rendering as empty")
+}
+
+// A converted invoice's API response exposes fx_conversion and each line's original charge amounts
+// (via the embedded domain model); a non-converted invoice omits them (§9.3, L3-D).
+func TestInvoiceResponse_ExposesFxConversionAndLineOriginals(t *testing.T) {
+	converted := &invoice.Invoice{
+		ID:       "inv_fx",
+		Currency: "inr",
+		FxConversion: &types.FxConversion{
+			ChargeCurrency: "usd", BillingCurrency: "inr",
+			Rate: decimal.NewFromInt(83), Scope: "tenant",
+		},
+		LineItems: []*invoice.InvoiceLineItem{{
+			ID: "il_fx", Currency: "inr", Amount: decimal.NewFromInt(8300),
+			OriginalCurrency: lo.ToPtr("usd"), OriginalAmount: lo.ToPtr(decimal.NewFromInt(100)),
+		}},
+	}
+	raw, err := json.Marshal(NewInvoiceResponse(converted))
+	require.NoError(t, err)
+	s := string(raw)
+	assert.Contains(t, s, `"fx_conversion"`)
+	assert.Contains(t, s, `"charge_currency":"usd"`)
+	assert.Contains(t, s, `"original_currency":"usd"`)
+	assert.Contains(t, s, `"original_amount":"100"`)
+
+	// Non-converted invoice omits them.
+	plain := &invoice.Invoice{
+		ID: "inv_plain", Currency: "usd",
+		LineItems: []*invoice.InvoiceLineItem{{ID: "il_plain", Currency: "usd", Amount: decimal.NewFromInt(100)}},
+	}
+	rawp, err := json.Marshal(NewInvoiceResponse(plain))
+	require.NoError(t, err)
+	sp := string(rawp)
+	assert.NotContains(t, sp, `"fx_conversion"`)
+	assert.NotContains(t, sp, `"original_currency"`)
 }

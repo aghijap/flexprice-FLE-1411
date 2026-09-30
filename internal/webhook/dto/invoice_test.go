@@ -466,3 +466,31 @@ func TestNewInvoice_LineItemEncodingCostStaysWithinBudget(t *testing.T) {
 	assert.Less(t, len(raw), svixPayloadLimitBytes,
 		"1000 non-zero line items marshalled to %d bytes, over the Svix limit", len(raw))
 }
+
+// A converted invoice's webhook payload exposes the frozen fx_conversion and each line's original
+// charge amounts, so integrations see the same conversion detail as the API (§9.3, L3-D).
+func TestNewInvoice_IncludesFxConversionAndLineOriginals(t *testing.T) {
+	li := testLineItem("inv_li_fx", "price_api", decimal.NewFromInt(8300), decimal.NewFromInt(1))
+	li.Currency = "inr"
+	li.OriginalCurrency = lo.ToPtr("usd")
+	li.OriginalAmount = lo.ToPtr(decimal.NewFromInt(100))
+
+	resp := testInvoiceResponse([]*dto.InvoiceLineItemResponse{li}, nil)
+	resp.Currency = "inr"
+	resp.FxConversion = &types.FxConversion{
+		ChargeCurrency:  "usd",
+		BillingCurrency: "inr",
+		Rate:            decimal.NewFromInt(83),
+		Scope:           "tenant",
+	}
+
+	raw, err := json.Marshal(NewInvoiceWebhookPayload(resp, types.WebhookEventInvoiceUpdateFinalized))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	s := string(raw)
+	assert.Contains(t, s, `"fx_conversion"`, "webhook must include fx_conversion")
+	assert.Contains(t, s, `"charge_currency":"usd"`)
+	assert.Contains(t, s, `"original_currency":"usd"`, "line item must include original_currency")
+	assert.Contains(t, s, `"original_amount":"100"`, "line item must include original_amount")
+}
