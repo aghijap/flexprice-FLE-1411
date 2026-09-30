@@ -10,7 +10,6 @@ import (
 	"github.com/flexprice/flexprice/ent/fxrate"
 	"github.com/flexprice/flexprice/ent/predicate"
 	"github.com/flexprice/flexprice/ent/schema"
-	"github.com/flexprice/flexprice/internal/cache"
 	domainFXRate "github.com/flexprice/flexprice/internal/domain/fxrate"
 	"github.com/flexprice/flexprice/internal/dsl"
 	ierr "github.com/flexprice/flexprice/internal/errors"
@@ -21,18 +20,19 @@ import (
 )
 
 type fxRateRepository struct {
-	client     postgres.IClient
-	log        *logger.Logger
-	queryOpts  FXRateQueryOptions
-	redisCache cache.RedisCache
+	client    postgres.IClient
+	log       *logger.Logger
+	queryOpts FXRateQueryOptions
 }
 
-func NewFXRateRepository(client postgres.IClient, log *logger.Logger, redisCache cache.RedisCache) domainFXRate.Repository {
+// FX rates are not cached: resolution is a money path that must read the current
+// rate, and the per-id read is low traffic, so a cache would add staleness risk
+// for no benefit.
+func NewFXRateRepository(client postgres.IClient, log *logger.Logger) domainFXRate.Repository {
 	return &fxRateRepository{
-		client:     client,
-		log:        log,
-		queryOpts:  FXRateQueryOptions{},
-		redisCache: redisCache,
+		client:    client,
+		log:       log,
+		queryOpts: FXRateQueryOptions{},
 	}
 }
 
@@ -97,10 +97,6 @@ func (r *fxRateRepository) Get(ctx context.Context, id string) (*domainFXRate.FX
 	span := StartRepositorySpan(ctx, "fxrate", "get", map[string]interface{}{"fx_rate_id": id})
 	defer FinishSpan(span)
 
-	if cached := r.GetCache(ctx, id); cached != nil {
-		return cached, nil
-	}
-
 	client := r.client.Reader(ctx)
 	entRate, err := client.FXRate.Query().
 		Where(
@@ -121,9 +117,7 @@ func (r *fxRateRepository) Get(ctx context.Context, id string) (*domainFXRate.FX
 		return nil, ierr.WithError(err).WithHint("Failed to get fx rate").Mark(ierr.ErrDatabase)
 	}
 
-	result := domainFXRate.FromEnt(entRate)
-	r.SetCache(ctx, result)
-	return result, nil
+	return domainFXRate.FromEnt(entRate), nil
 }
 
 func (r *fxRateRepository) List(ctx context.Context, filter *types.FXRateFilter) ([]*domainFXRate.FXRate, error) {
@@ -233,7 +227,6 @@ func (r *fxRateRepository) Update(ctx context.Context, fr *domainFXRate.FXRate) 
 		return ierr.WithError(err).WithHint("Failed to update fx rate").Mark(ierr.ErrDatabase)
 	}
 	SetSpanSuccess(span)
-	r.DeleteCache(ctx, fr)
 	return nil
 }
 
@@ -259,7 +252,6 @@ func (r *fxRateRepository) Delete(ctx context.Context, fr *domainFXRate.FXRate) 
 		return ierr.WithError(err).WithHint("Failed to delete fx rate").Mark(ierr.ErrDatabase)
 	}
 	SetSpanSuccess(span)
-	r.DeleteCache(ctx, fr)
 	return nil
 }
 
@@ -442,38 +434,4 @@ func (o FXRateQueryOptions) applyEntityQueryOptions(_ context.Context, f *types.
 		}
 	}
 	return query, nil
-}
-
-// caching
-
-func (r *fxRateRepository) SetCache(ctx context.Context, fr *domainFXRate.FXRate) {
-	span, ctx := cache.StartRedisCacheSpan(ctx, "fxrate", "set", map[string]interface{}{"fx_rate_id": fr.ID})
-	defer cache.FinishSpan(span)
-
-	cacheKey := cache.GenerateKey(ctx, cache.PrefixFXRate, fr.ID)
-	r.redisCache.Set(ctx, cacheKey, fr, cache.ExpiryDefaultRedis)
-}
-
-func (r *fxRateRepository) GetCache(ctx context.Context, id string) *domainFXRate.FXRate {
-	span, ctx := cache.StartRedisCacheSpan(ctx, "fxrate", "get", map[string]interface{}{"fx_rate_id": id})
-	defer cache.FinishSpan(span)
-
-	cacheKey := cache.GenerateKey(ctx, cache.PrefixFXRate, id)
-	value, found := r.redisCache.Get(ctx, cacheKey)
-	if !found {
-		return nil
-	}
-	fr, ok := cache.UnmarshalCacheValue[domainFXRate.FXRate](value)
-	if !ok {
-		return nil
-	}
-	return fr
-}
-
-func (r *fxRateRepository) DeleteCache(ctx context.Context, fr *domainFXRate.FXRate) {
-	span, ctx := cache.StartRedisCacheSpan(ctx, "fxrate", "delete", map[string]interface{}{"fx_rate_id": fr.ID})
-	defer cache.FinishSpan(span)
-
-	cacheKey := cache.GenerateKey(ctx, cache.PrefixFXRate, fr.ID)
-	r.redisCache.Delete(ctx, cacheKey)
 }

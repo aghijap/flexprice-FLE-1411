@@ -239,7 +239,7 @@ func NewTaxRateRepository(p RepositoryParams) taxrate.Repository {
 }
 
 func NewFXRateRepository(p RepositoryParams) fxrate.Repository {
-	return entRepo.NewFXRateRepository(p.EntClient, p.Logger, p.RedisCache)
+	return entRepo.NewFXRateRepository(p.EntClient, p.Logger)
 }
 
 func NewTaxAssociationRepository(p RepositoryParams) taxassociation.Repository {
