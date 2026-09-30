@@ -318,10 +318,14 @@ func (s *invoiceService) CreateEmptyDraftInvoice(ctx context.Context, req dto.Cr
 		}
 		code := strings.ToLower(req.Currency)
 		if ccCfg.IsCustom(code) {
-			inv.Currency = ccCfg.DefaultFiatCurrency
+			fiat, rate, err := s.customCurrencyFiatTarget(txCtx, ccCfg, code, req.CustomerID)
+			if err != nil {
+				return err
+			}
+			inv.Currency = fiat
 			inv.CustomCurrency = &types.CustomCurrency{
 				Code: code,
-				Rate: ccCfg.RateFor(code, ccCfg.DefaultFiatCurrency),
+				Rate: rate,
 			}
 		}
 
@@ -4223,14 +4227,39 @@ func (s *invoiceService) projectPreviewToFiat(ctx context.Context, inv *invoice.
 	}
 
 	code := strings.ToLower(inv.Currency)
-	inv.Currency = ccCfg.DefaultFiatCurrency
+	fiat, rate, err := s.customCurrencyFiatTarget(ctx, ccCfg, code, inv.CustomerID)
+	if err != nil {
+		return err
+	}
+	inv.Currency = fiat
 	inv.CustomCurrency = &types.CustomCurrency{
 		Code: code,
-		Rate: ccCfg.RateFor(code, ccCfg.DefaultFiatCurrency),
+		Rate: rate,
 	}
 	inv.CaptureCustomCurrencyDenomination()
 	inv.ProjectCustomCurrency()
 	return nil
+}
+
+// customCurrencyFiatTarget picks the fiat currency a custom-currency draft is denominated in, and
+// the factor to it. It prefers the customer's billing currency when set and a factor exists, so a
+// converted custom-currency invoice is born in the billing currency with no later FX (§5.5);
+// otherwise it uses the tenant default fiat.
+func (s *invoiceService) customCurrencyFiatTarget(ctx context.Context, ccCfg types.CustomCurrencyConfig, code, customerID string) (string, decimal.Decimal, error) {
+	fiat := ccCfg.DefaultFiatCurrency
+	if customerID != "" {
+		cust, err := s.CustomerRepo.Get(ctx, customerID)
+		if err != nil {
+			return "", decimal.Zero, err
+		}
+		if cust.BillingCurrency != nil && *cust.BillingCurrency != "" {
+			billing := strings.ToLower(*cust.BillingCurrency)
+			if !types.IsMatchingCurrency(billing, fiat) && !ccCfg.RateFor(code, billing).IsZero() {
+				fiat = billing
+			}
+		}
+	}
+	return fiat, ccCfg.RateFor(code, fiat), nil
 }
 
 func (s *invoiceService) RecalculateTaxesOnInvoice(ctx context.Context, inv *invoice.Invoice) (*invoice.Invoice, error) {
