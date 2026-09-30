@@ -937,7 +937,7 @@ func resolveBonusCredits(slab *types.BonusCreditsSlab, creditsToAdd decimal.Deci
 
 func (s *walletService) handlePurchasedCreditInvoicedTransaction(ctx context.Context, walletID string, idempotencyKey *string, req *dto.TopUpWalletRequest) (string, string, error) {
 	// Initialize required services
-	invoiceService := NewInvoiceService(s.ServiceParams)
+	invoiceSvc := NewInvoiceService(s.ServiceParams)
 	taxService := NewTaxService(s.ServiceParams)
 	isPayFirst := req.Checkout != nil
 
@@ -1196,7 +1196,7 @@ func (s *walletService) handlePurchasedCreditInvoicedTransaction(ctx context.Con
 		if isPayFirst {
 			// Pay-first: leave DRAFT until checkout complete finalizes + reconciles.
 			invReq.SourceType = types.InvoiceSourceTypeCheckout
-			inv, skipped, err = invoiceService.CreateComputedDraftInvoice(ctx, invReq)
+			inv, skipped, err = invoiceSvc.CreateComputedDraftInvoice(ctx, invReq)
 			if err != nil {
 				return ierr.WithError(err).
 					WithHint("Failed to create draft invoice for purchased credits").
@@ -1211,7 +1211,7 @@ func (s *walletService) handlePurchasedCreditInvoicedTransaction(ctx context.Con
 					Mark(ierr.ErrValidation)
 			}
 		} else {
-			inv, err = invoiceService.CreateOneOffInvoice(ctx, invReq)
+			inv, err = invoiceSvc.CreateOneOffInvoice(ctx, invReq)
 			if err != nil {
 				return ierr.WithError(err).
 					WithHint("Failed to create invoice for purchased credits").
@@ -1220,6 +1220,18 @@ func (s *walletService) handlePurchasedCreditInvoicedTransaction(ctx context.Con
 		}
 
 		invoiceID = inv.ID
+
+		// Convert the top-up invoice to the customer's billing currency inside this same tx, so a
+		// missing rate rolls back the pending wallet credit rather than stranding it (§6.2). The
+		// credits stay in the wallet's own currency; only the invoice converts. A no-op for a
+		// same-currency customer, a custom-currency draft, or an already-paid invoice.
+		domainInv, err := s.InvoiceRepo.Get(ctx, inv.ID)
+		if err != nil {
+			return err
+		}
+		if err := invoiceSvc.(*invoiceService).convertAndRetaxInvoice(ctx, domainInv); err != nil {
+			return err
+		}
 
 		if autoCompleteEnabled {
 			s.Logger.Info(ctx, "created auto-completed credit purchase",
