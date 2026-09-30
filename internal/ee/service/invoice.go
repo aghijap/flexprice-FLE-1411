@@ -4126,19 +4126,35 @@ func (s *invoiceService) projectPreviewToFiat(ctx context.Context, inv *invoice.
 // otherwise it uses the tenant default fiat.
 func (s *invoiceService) customCurrencyFiatTarget(ctx context.Context, ccCfg types.CustomCurrencyConfig, code, customerID string) (string, decimal.Decimal, error) {
 	fiat := ccCfg.DefaultFiatCurrency
-	if customerID != "" {
-		cust, err := s.CustomerRepo.Get(ctx, customerID)
-		if err != nil {
-			return "", decimal.Zero, err
-		}
-		if cust.BillingCurrency != nil && *cust.BillingCurrency != "" {
-			billing := strings.ToLower(*cust.BillingCurrency)
-			if !types.IsMatchingCurrency(billing, fiat) && !ccCfg.RateFor(code, billing).IsZero() {
-				fiat = billing
-			}
-		}
+	if customerID == "" {
+		return fiat, ccCfg.RateFor(code, fiat), nil
 	}
-	return fiat, ccCfg.RateFor(code, fiat), nil
+
+	cust, err := s.CustomerRepo.Get(ctx, customerID)
+	if err != nil {
+		return "", decimal.Zero, err
+	}
+	if cust.BillingCurrency == nil || *cust.BillingCurrency == "" {
+		return fiat, ccCfg.RateFor(code, fiat), nil
+	}
+
+	billing := strings.ToLower(*cust.BillingCurrency)
+	if types.IsMatchingCurrency(billing, fiat) {
+		return fiat, ccCfg.RateFor(code, fiat), nil
+	}
+
+	// The customer is billed in a currency other than the tenant default, so the custom code must
+	// have a factor for it — otherwise the invoice cannot be issued in the billing currency (§5.5).
+	// Rejecting here is the one-off safety net: convertAndRetaxInvoice is a no-op for a custom-currency
+	// invoice, so there is no finalize-time guard.
+	rate := ccCfg.RateFor(code, billing)
+	if rate.IsZero() {
+		return "", decimal.Zero, ierr.NewErrorf("no conversion factor from %s to %s", code, billing).
+			WithHintf("Add a %s to %s factor to the custom currency configuration before invoicing this customer.", code, billing).
+			WithReportableDetails(map[string]any{"custom_currency": code, "billing_currency": billing}).
+			Mark(ierr.ErrValidation)
+	}
+	return billing, rate, nil
 }
 
 func (s *invoiceService) RecalculateTaxesOnInvoice(ctx context.Context, inv *invoice.Invoice) (*invoice.Invoice, error) {
