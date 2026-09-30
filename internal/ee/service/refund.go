@@ -88,6 +88,12 @@ func (s *refundService) PrepareRefundsForVoidedInvoice(ctx context.Context, inv 
 			Mark(ierr.ErrValidation)
 	}
 
+	// A converted invoice returns its full funded value to the charge-currency prepaid wallet at the
+	// frozen rate (§6.3), never the billing-currency amount split across payments.
+	if inv.FxConversion != nil {
+		return s.prepareChargeCurrencyVoidRefund(ctx, inv)
+	}
+
 	rows, err := s.allocateAcrossPayments(ctx, inv, amount, allocationContext{
 		reason:         types.RefundReasonOrderChange,
 		idempotencyKey: fmt.Sprintf("%s-void", inv.ID),
@@ -98,6 +104,60 @@ func (s *refundService) PrepareRefundsForVoidedInvoice(ctx context.Context, inv 
 	}
 
 	return s.persist(ctx, rows)
+}
+
+// prepareChargeCurrencyVoidRefund returns the full funded value of a converted invoice to the
+// customer's charge-currency prepaid wallet at the frozen rate: the credits leg is the exact charge
+// amount recorded in fx_conversion.source; the cash leg is the remaining cash
+// (amount_paid − refunded_amount) divided by the frozen rate (§6.3).
+func (s *refundService) prepareChargeCurrencyVoidRefund(ctx context.Context, inv *invoice.Invoice) ([]*refund.Refund, error) {
+	creditsCharge := inv.FxConversion.Source.TotalPrepaidCreditsApplied
+	cashCharge := decimal.Zero
+	if cashInr := inv.AmountPaid.Sub(inv.RefundedAmount); cashInr.IsPositive() {
+		cashCharge = frozenChargeAmount(inv, cashInr)
+	}
+
+	total := creditsCharge.Add(cashCharge)
+	if !total.IsPositive() {
+		return nil, nil
+	}
+
+	row := s.newWalletRow(ctx, inv, inv.FxConversion.ChargeCurrency, total, allocationContext{
+		reason:         types.RefundReasonOrderChange,
+		idempotencyKey: fmt.Sprintf("%s-void", inv.ID),
+		allowGateway:   false,
+	}, 0)
+	return s.persist(ctx, []*refund.Refund{row})
+}
+
+// frozenChargeAmount reverses a billing-currency amount to the invoice's charge currency at the
+// invoice's own frozen rate, rounded to charge-currency precision (§6.3). Shared by void and the
+// credit-note prepaid-wallet refund.
+func frozenChargeAmount(inv *invoice.Invoice, billing decimal.Decimal) decimal.Decimal {
+	if inv.FxConversion == nil || !inv.FxConversion.Rate.IsPositive() {
+		return decimal.Zero
+	}
+	return types.RoundToCurrencyPrecision(billing.Div(inv.FxConversion.Rate), inv.FxConversion.ChargeCurrency)
+}
+
+// newWalletRow builds a PENDING wallet-destination refund row in an explicit currency, for a refund
+// that settles to a charge-currency wallet on a converted invoice.
+func (s *refundService) newWalletRow(ctx context.Context, inv *invoice.Invoice, currency string, amount decimal.Decimal, alloc allocationContext, index int) *refund.Refund {
+	return refund.NewRefundBuilder(nil).
+		WithID(types.GenerateUUIDWithPrefix(types.UUID_PREFIX_REFUND)).
+		WithInvoiceID(inv.ID).
+		WithCreditNoteID(alloc.creditNoteID).
+		WithAmount(amount).
+		WithSettledAmount(decimal.Zero).
+		WithCurrency(currency).
+		WithStatus(types.RefundStatusPending).
+		WithRefundReason(alloc.reason).
+		WithDestination(types.RefundDestinationWallet).
+		WithAttempt(1).
+		WithIdempotencyKey(fmt.Sprintf("%s-%d", alloc.idempotencyKey, index)).
+		WithEnvironmentID(types.GetEnvironmentID(ctx)).
+		WithBaseModel(types.GetDefaultBaseModel(ctx)).
+		Build()
 }
 
 func (s *refundService) persist(ctx context.Context, rows []*refund.Refund) ([]*refund.Refund, error) {
