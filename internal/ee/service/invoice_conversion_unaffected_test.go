@@ -88,7 +88,7 @@ func (s *InvoiceConversionFinalizeSuite) TestExistingCustomersUnaffected() {
 				[]*invoice.InvoiceLineItem{line("il_u1", "60"), line("il_u2", "40")})
 
 			svc, spy := s.newServiceWithFXSpy()
-			s.NoError(svc.convertAndRetaxAtFinalize(s.ctx(), inv))
+			s.NoError(svc.convertAndRetaxInvoice(s.ctx(), inv))
 
 			s.Equal(0, spy.reads, "case %d: finalize must not query fx_rates", i)
 			s.Equal("usd", inv.Currency)

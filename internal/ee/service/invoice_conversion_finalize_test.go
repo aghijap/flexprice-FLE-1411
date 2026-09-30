@@ -121,7 +121,7 @@ func (s *InvoiceConversionFinalizeSuite) TestOneOffConverts() {
 	inv := s.seedDraftInvoice("inv_oneoff", "cust_1", "usd", types.InvoiceTypeOneOff, nil,
 		[]*invoice.InvoiceLineItem{line("il_1", "60"), line("il_2", "40")})
 
-	s.NoError(s.svc.convertAndRetaxAtFinalize(s.ctx(), inv))
+	s.NoError(s.svc.convertAndRetaxInvoice(s.ctx(), inv))
 
 	s.Equal("inr", inv.Currency)
 	s.True(decimal.RequireFromString("8300").Equal(inv.Subtotal), "subtotal got %s", inv.Subtotal)
@@ -151,7 +151,7 @@ func (s *InvoiceConversionFinalizeSuite) TestSubscriptionConverts() {
 	inv := s.seedDraftInvoice("inv_sub", "cust_2", "usd", types.InvoiceTypeSubscription, lo.ToPtr("sub_x"),
 		[]*invoice.InvoiceLineItem{line("il_s1", "100")})
 
-	s.NoError(s.svc.convertAndRetaxAtFinalize(s.ctx(), inv))
+	s.NoError(s.svc.convertAndRetaxInvoice(s.ctx(), inv))
 
 	s.Equal("inr", inv.Currency)
 	s.True(decimal.RequireFromString("8300").Equal(inv.AmountDue))
@@ -164,7 +164,7 @@ func (s *InvoiceConversionFinalizeSuite) TestNoBillingCurrencyNoOp() {
 	inv := s.seedDraftInvoice("inv_nobc", "cust_3", "usd", types.InvoiceTypeOneOff, nil,
 		[]*invoice.InvoiceLineItem{line("il_n1", "100")})
 
-	s.NoError(s.svc.convertAndRetaxAtFinalize(s.ctx(), inv))
+	s.NoError(s.svc.convertAndRetaxInvoice(s.ctx(), inv))
 	s.Equal("usd", inv.Currency)
 	s.Nil(inv.FxConversion)
 }
@@ -174,7 +174,7 @@ func (s *InvoiceConversionFinalizeSuite) TestMatchingCurrencyNoOp() {
 	inv := s.seedDraftInvoice("inv_match", "cust_4", "usd", types.InvoiceTypeOneOff, nil,
 		[]*invoice.InvoiceLineItem{line("il_m1", "100")})
 
-	s.NoError(s.svc.convertAndRetaxAtFinalize(s.ctx(), inv))
+	s.NoError(s.svc.convertAndRetaxInvoice(s.ctx(), inv))
 	s.Equal("usd", inv.Currency)
 	s.Nil(inv.FxConversion)
 }
@@ -185,7 +185,7 @@ func (s *InvoiceConversionFinalizeSuite) TestMissingRateStaysDraft() {
 	inv := s.seedDraftInvoice("inv_norate", "cust_5", "usd", types.InvoiceTypeOneOff, nil,
 		[]*invoice.InvoiceLineItem{line("il_r1", "100")})
 
-	err := s.svc.convertAndRetaxAtFinalize(s.ctx(), inv)
+	err := s.svc.convertAndRetaxInvoice(s.ctx(), inv)
 	s.Error(err)
 	s.True(ierr.IsInvalidOperation(err), "missing rate must be an invalid-operation error, got %v", err)
 	// The resolver's not-found must not leak through: a double-marked error makes the HTTP status
@@ -259,13 +259,13 @@ func (s *InvoiceConversionFinalizeSuite) TestConvertOnceRetrySkips() {
 	inv := s.seedDraftInvoice("inv_once", "cust_6", "usd", types.InvoiceTypeOneOff, nil,
 		[]*invoice.InvoiceLineItem{line("il_o1", "100")})
 
-	s.NoError(s.svc.convertAndRetaxAtFinalize(s.ctx(), inv))
+	s.NoError(s.svc.convertAndRetaxInvoice(s.ctx(), inv))
 	s.Require().NotNil(inv.FxConversion)
 	firstRate := inv.FxConversion.Rate
 
 	// A second pass must be a no-op even if a different rate now exists.
 	s.seedTenantRate("inr", "usd", "0.5") // unrelated pair; the invoice is already inr
-	s.NoError(s.svc.convertAndRetaxAtFinalize(s.ctx(), inv))
+	s.NoError(s.svc.convertAndRetaxInvoice(s.ctx(), inv))
 	s.Equal("inr", inv.Currency)
 	s.True(firstRate.Equal(inv.FxConversion.Rate), "fx_conversion must not change on a second pass")
 }
@@ -277,7 +277,7 @@ func (s *InvoiceConversionFinalizeSuite) TestAmountPaidNonZeroNoOp() {
 		[]*invoice.InvoiceLineItem{line("il_p1", "100")})
 	inv.AmountPaid = decimal.RequireFromString("100")
 
-	s.NoError(s.svc.convertAndRetaxAtFinalize(s.ctx(), inv))
+	s.NoError(s.svc.convertAndRetaxInvoice(s.ctx(), inv))
 	s.Equal("usd", inv.Currency, "a paid invoice is not converted here (pay-first is a later PR)")
 	s.Nil(inv.FxConversion)
 }
