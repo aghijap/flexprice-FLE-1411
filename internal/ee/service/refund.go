@@ -68,6 +68,13 @@ func (s *refundService) PrepareRefundsForCreditNote(ctx context.Context, cn *cre
 		}
 	}
 
+	// On a converted invoice a non-gateway (prepaid-wallet) refund lands in the charge-currency
+	// prepaid wallet at the frozen rate (§7). BACK_TO_SOURCE still refunds the billing-currency
+	// amount to the gateway, with no conversion.
+	if inv.FxConversion != nil && !target.AllowsBackToSource() {
+		return s.prepareChargeCurrencyCreditNoteRefund(ctx, cn, inv)
+	}
+
 	rows, err := s.allocateAcrossPayments(ctx, inv, cn.TotalAmount, allocationContext{
 		creditNoteID:   lo.ToPtr(cn.ID),
 		reason:         refundReasonFromCreditNote(cn.Reason),
@@ -79,6 +86,23 @@ func (s *refundService) PrepareRefundsForCreditNote(ctx context.Context, cn *cre
 	}
 
 	return s.persist(ctx, rows)
+}
+
+// prepareChargeCurrencyCreditNoteRefund converts a credit note's billing-currency refund back to the
+// invoice's charge currency at the frozen rate and settles it to the charge-currency prepaid wallet
+// (§7). Credit notes never return prepaid credits, only the cash the customer paid.
+func (s *refundService) prepareChargeCurrencyCreditNoteRefund(ctx context.Context, cn *creditnote.CreditNote, inv *invoice.Invoice) ([]*refund.Refund, error) {
+	chargeAmount := frozenChargeAmount(inv, cn.TotalAmount)
+	if !chargeAmount.IsPositive() {
+		return nil, nil
+	}
+	row := s.newWalletRow(ctx, inv, inv.FxConversion.ChargeCurrency, chargeAmount, allocationContext{
+		creditNoteID:   lo.ToPtr(cn.ID),
+		reason:         refundReasonFromCreditNote(cn.Reason),
+		idempotencyKey: cn.ID,
+		allowGateway:   false,
+	}, 0)
+	return s.persist(ctx, []*refund.Refund{row})
 }
 
 func (s *refundService) PrepareRefundsForVoidedInvoice(ctx context.Context, inv *invoice.Invoice, amount decimal.Decimal) ([]*refund.Refund, error) {
