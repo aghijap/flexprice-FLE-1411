@@ -116,6 +116,10 @@ func (s *invoiceService) CreateOneOffInvoice(ctx context.Context, req dto.Create
 		}
 	}
 
+	if err := s.rejectPrepaidCrossCurrencyOneOff(ctx, req); err != nil {
+		return nil, err
+	}
+
 	// Validate coupons
 	couponValidationService := NewCouponValidationService(s.ServiceParams)
 	validCoupons := make([]dto.InvoiceCoupon, 0)
