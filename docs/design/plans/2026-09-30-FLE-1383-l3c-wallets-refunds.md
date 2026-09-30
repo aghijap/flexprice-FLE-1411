@@ -49,4 +49,7 @@ A scheduled job that voids stale finalized-unpaid top-up invoices and releases t
 ## Verification
 
 - Unit tests per task green; `make lint-ci`.
-- Dockerized: converted invoice paid by prepaid+cash → void → assert USD wallet credited $X and INR cash leg converted at frozen rate; a `mac→inr` custom subscription bills in INR with the custom rate frozen (no `fx_conversion`).
+- **Local stack (integration) via the `flexprice-local-stack` skill** (`.agents/skills/flexprice-local-stack/SKILL.md`) — bring the stack up on the **existing named volumes**; **never** `docker compose down -v`:
+  - `make app-up` → `make migrate-local` → `make app-rebuild-backend` (rebuild the Go image). To exercise **this branch's** code, build from the worktree under the `flexprice` project: `docker compose -p flexprice -f docker-compose.yml build flexprice-build` then `docker compose -p flexprice -f docker-compose.yml up -d flexprice-api flexprice-consumer flexprice-worker`.
+  - Auth: `-H "x-api-key: sk_local_flexprice_test_key" -H "x-environment-id: 00000000-0000-0000-0000-000000000000"`.
+  - Flow: converted invoice paid by prepaid+cash → void → assert USD wallet credited $X and INR cash leg converted at frozen rate; a `mac→inr` custom subscription bills in INR with the custom rate frozen (no `fx_conversion`).
