@@ -24,187 +24,187 @@ type FXRateUpdate struct {
 }
 
 // Where appends a list predicates to the FXRateUpdate builder.
-func (fru *FXRateUpdate) Where(ps ...predicate.FXRate) *FXRateUpdate {
-	fru.mutation.Where(ps...)
-	return fru
+func (_u *FXRateUpdate) Where(ps ...predicate.FXRate) *FXRateUpdate {
+	_u.mutation.Where(ps...)
+	return _u
 }
 
 // SetStatus sets the "status" field.
-func (fru *FXRateUpdate) SetStatus(s string) *FXRateUpdate {
-	fru.mutation.SetStatus(s)
-	return fru
+func (_u *FXRateUpdate) SetStatus(v string) *FXRateUpdate {
+	_u.mutation.SetStatus(v)
+	return _u
 }
 
 // SetNillableStatus sets the "status" field if the given value is not nil.
-func (fru *FXRateUpdate) SetNillableStatus(s *string) *FXRateUpdate {
-	if s != nil {
-		fru.SetStatus(*s)
+func (_u *FXRateUpdate) SetNillableStatus(v *string) *FXRateUpdate {
+	if v != nil {
+		_u.SetStatus(*v)
 	}
-	return fru
+	return _u
 }
 
 // SetUpdatedAt sets the "updated_at" field.
-func (fru *FXRateUpdate) SetUpdatedAt(t time.Time) *FXRateUpdate {
-	fru.mutation.SetUpdatedAt(t)
-	return fru
+func (_u *FXRateUpdate) SetUpdatedAt(v time.Time) *FXRateUpdate {
+	_u.mutation.SetUpdatedAt(v)
+	return _u
 }
 
 // SetUpdatedBy sets the "updated_by" field.
-func (fru *FXRateUpdate) SetUpdatedBy(s string) *FXRateUpdate {
-	fru.mutation.SetUpdatedBy(s)
-	return fru
+func (_u *FXRateUpdate) SetUpdatedBy(v string) *FXRateUpdate {
+	_u.mutation.SetUpdatedBy(v)
+	return _u
 }
 
 // SetNillableUpdatedBy sets the "updated_by" field if the given value is not nil.
-func (fru *FXRateUpdate) SetNillableUpdatedBy(s *string) *FXRateUpdate {
-	if s != nil {
-		fru.SetUpdatedBy(*s)
+func (_u *FXRateUpdate) SetNillableUpdatedBy(v *string) *FXRateUpdate {
+	if v != nil {
+		_u.SetUpdatedBy(*v)
 	}
-	return fru
+	return _u
 }
 
 // ClearUpdatedBy clears the value of the "updated_by" field.
-func (fru *FXRateUpdate) ClearUpdatedBy() *FXRateUpdate {
-	fru.mutation.ClearUpdatedBy()
-	return fru
+func (_u *FXRateUpdate) ClearUpdatedBy() *FXRateUpdate {
+	_u.mutation.ClearUpdatedBy()
+	return _u
 }
 
 // SetScope sets the "scope" field.
-func (fru *FXRateUpdate) SetScope(s string) *FXRateUpdate {
-	fru.mutation.SetScope(s)
-	return fru
+func (_u *FXRateUpdate) SetScope(v string) *FXRateUpdate {
+	_u.mutation.SetScope(v)
+	return _u
 }
 
 // SetNillableScope sets the "scope" field if the given value is not nil.
-func (fru *FXRateUpdate) SetNillableScope(s *string) *FXRateUpdate {
-	if s != nil {
-		fru.SetScope(*s)
+func (_u *FXRateUpdate) SetNillableScope(v *string) *FXRateUpdate {
+	if v != nil {
+		_u.SetScope(*v)
 	}
-	return fru
+	return _u
 }
 
 // SetScopeID sets the "scope_id" field.
-func (fru *FXRateUpdate) SetScopeID(s string) *FXRateUpdate {
-	fru.mutation.SetScopeID(s)
-	return fru
+func (_u *FXRateUpdate) SetScopeID(v string) *FXRateUpdate {
+	_u.mutation.SetScopeID(v)
+	return _u
 }
 
 // SetNillableScopeID sets the "scope_id" field if the given value is not nil.
-func (fru *FXRateUpdate) SetNillableScopeID(s *string) *FXRateUpdate {
-	if s != nil {
-		fru.SetScopeID(*s)
+func (_u *FXRateUpdate) SetNillableScopeID(v *string) *FXRateUpdate {
+	if v != nil {
+		_u.SetScopeID(*v)
 	}
-	return fru
+	return _u
 }
 
 // SetFromCurrency sets the "from_currency" field.
-func (fru *FXRateUpdate) SetFromCurrency(s string) *FXRateUpdate {
-	fru.mutation.SetFromCurrency(s)
-	return fru
+func (_u *FXRateUpdate) SetFromCurrency(v string) *FXRateUpdate {
+	_u.mutation.SetFromCurrency(v)
+	return _u
 }
 
 // SetNillableFromCurrency sets the "from_currency" field if the given value is not nil.
-func (fru *FXRateUpdate) SetNillableFromCurrency(s *string) *FXRateUpdate {
-	if s != nil {
-		fru.SetFromCurrency(*s)
+func (_u *FXRateUpdate) SetNillableFromCurrency(v *string) *FXRateUpdate {
+	if v != nil {
+		_u.SetFromCurrency(*v)
 	}
-	return fru
+	return _u
 }
 
 // SetToCurrency sets the "to_currency" field.
-func (fru *FXRateUpdate) SetToCurrency(s string) *FXRateUpdate {
-	fru.mutation.SetToCurrency(s)
-	return fru
+func (_u *FXRateUpdate) SetToCurrency(v string) *FXRateUpdate {
+	_u.mutation.SetToCurrency(v)
+	return _u
 }
 
 // SetNillableToCurrency sets the "to_currency" field if the given value is not nil.
-func (fru *FXRateUpdate) SetNillableToCurrency(s *string) *FXRateUpdate {
-	if s != nil {
-		fru.SetToCurrency(*s)
+func (_u *FXRateUpdate) SetNillableToCurrency(v *string) *FXRateUpdate {
+	if v != nil {
+		_u.SetToCurrency(*v)
 	}
-	return fru
+	return _u
 }
 
 // SetRate sets the "rate" field.
-func (fru *FXRateUpdate) SetRate(d decimal.Decimal) *FXRateUpdate {
-	fru.mutation.SetRate(d)
-	return fru
+func (_u *FXRateUpdate) SetRate(v decimal.Decimal) *FXRateUpdate {
+	_u.mutation.SetRate(v)
+	return _u
 }
 
 // SetNillableRate sets the "rate" field if the given value is not nil.
-func (fru *FXRateUpdate) SetNillableRate(d *decimal.Decimal) *FXRateUpdate {
-	if d != nil {
-		fru.SetRate(*d)
+func (_u *FXRateUpdate) SetNillableRate(v *decimal.Decimal) *FXRateUpdate {
+	if v != nil {
+		_u.SetRate(*v)
 	}
-	return fru
+	return _u
 }
 
 // SetValidFrom sets the "valid_from" field.
-func (fru *FXRateUpdate) SetValidFrom(t time.Time) *FXRateUpdate {
-	fru.mutation.SetValidFrom(t)
-	return fru
+func (_u *FXRateUpdate) SetValidFrom(v time.Time) *FXRateUpdate {
+	_u.mutation.SetValidFrom(v)
+	return _u
 }
 
 // SetNillableValidFrom sets the "valid_from" field if the given value is not nil.
-func (fru *FXRateUpdate) SetNillableValidFrom(t *time.Time) *FXRateUpdate {
-	if t != nil {
-		fru.SetValidFrom(*t)
+func (_u *FXRateUpdate) SetNillableValidFrom(v *time.Time) *FXRateUpdate {
+	if v != nil {
+		_u.SetValidFrom(*v)
 	}
-	return fru
+	return _u
 }
 
 // ClearValidFrom clears the value of the "valid_from" field.
-func (fru *FXRateUpdate) ClearValidFrom() *FXRateUpdate {
-	fru.mutation.ClearValidFrom()
-	return fru
+func (_u *FXRateUpdate) ClearValidFrom() *FXRateUpdate {
+	_u.mutation.ClearValidFrom()
+	return _u
 }
 
 // SetValidTo sets the "valid_to" field.
-func (fru *FXRateUpdate) SetValidTo(t time.Time) *FXRateUpdate {
-	fru.mutation.SetValidTo(t)
-	return fru
+func (_u *FXRateUpdate) SetValidTo(v time.Time) *FXRateUpdate {
+	_u.mutation.SetValidTo(v)
+	return _u
 }
 
 // SetNillableValidTo sets the "valid_to" field if the given value is not nil.
-func (fru *FXRateUpdate) SetNillableValidTo(t *time.Time) *FXRateUpdate {
-	if t != nil {
-		fru.SetValidTo(*t)
+func (_u *FXRateUpdate) SetNillableValidTo(v *time.Time) *FXRateUpdate {
+	if v != nil {
+		_u.SetValidTo(*v)
 	}
-	return fru
+	return _u
 }
 
 // ClearValidTo clears the value of the "valid_to" field.
-func (fru *FXRateUpdate) ClearValidTo() *FXRateUpdate {
-	fru.mutation.ClearValidTo()
-	return fru
+func (_u *FXRateUpdate) ClearValidTo() *FXRateUpdate {
+	_u.mutation.ClearValidTo()
+	return _u
 }
 
 // SetMetadata sets the "metadata" field.
-func (fru *FXRateUpdate) SetMetadata(m map[string]string) *FXRateUpdate {
-	fru.mutation.SetMetadata(m)
-	return fru
+func (_u *FXRateUpdate) SetMetadata(v map[string]string) *FXRateUpdate {
+	_u.mutation.SetMetadata(v)
+	return _u
 }
 
 // ClearMetadata clears the value of the "metadata" field.
-func (fru *FXRateUpdate) ClearMetadata() *FXRateUpdate {
-	fru.mutation.ClearMetadata()
-	return fru
+func (_u *FXRateUpdate) ClearMetadata() *FXRateUpdate {
+	_u.mutation.ClearMetadata()
+	return _u
 }
 
 // Mutation returns the FXRateMutation object of the builder.
-func (fru *FXRateUpdate) Mutation() *FXRateMutation {
-	return fru.mutation
+func (_u *FXRateUpdate) Mutation() *FXRateMutation {
+	return _u.mutation
 }
 
 // Save executes the query and returns the number of nodes affected by the update operation.
-func (fru *FXRateUpdate) Save(ctx context.Context) (int, error) {
-	fru.defaults()
-	return withHooks(ctx, fru.sqlSave, fru.mutation, fru.hooks)
+func (_u *FXRateUpdate) Save(ctx context.Context) (int, error) {
+	_u.defaults()
+	return withHooks(ctx, _u.sqlSave, _u.mutation, _u.hooks)
 }
 
 // SaveX is like Save, but panics if an error occurs.
-func (fru *FXRateUpdate) SaveX(ctx context.Context) int {
-	affected, err := fru.Save(ctx)
+func (_u *FXRateUpdate) SaveX(ctx context.Context) int {
+	affected, err := _u.Save(ctx)
 	if err != nil {
 		panic(err)
 	}
@@ -212,44 +212,44 @@ func (fru *FXRateUpdate) SaveX(ctx context.Context) int {
 }
 
 // Exec executes the query.
-func (fru *FXRateUpdate) Exec(ctx context.Context) error {
-	_, err := fru.Save(ctx)
+func (_u *FXRateUpdate) Exec(ctx context.Context) error {
+	_, err := _u.Save(ctx)
 	return err
 }
 
 // ExecX is like Exec, but panics if an error occurs.
-func (fru *FXRateUpdate) ExecX(ctx context.Context) {
-	if err := fru.Exec(ctx); err != nil {
+func (_u *FXRateUpdate) ExecX(ctx context.Context) {
+	if err := _u.Exec(ctx); err != nil {
 		panic(err)
 	}
 }
 
 // defaults sets the default values of the builder before save.
-func (fru *FXRateUpdate) defaults() {
-	if _, ok := fru.mutation.UpdatedAt(); !ok {
+func (_u *FXRateUpdate) defaults() {
+	if _, ok := _u.mutation.UpdatedAt(); !ok {
 		v := fxrate.UpdateDefaultUpdatedAt()
-		fru.mutation.SetUpdatedAt(v)
+		_u.mutation.SetUpdatedAt(v)
 	}
 }
 
 // check runs all checks and user-defined validators on the builder.
-func (fru *FXRateUpdate) check() error {
-	if v, ok := fru.mutation.Scope(); ok {
+func (_u *FXRateUpdate) check() error {
+	if v, ok := _u.mutation.Scope(); ok {
 		if err := fxrate.ScopeValidator(v); err != nil {
 			return &ValidationError{Name: "scope", err: fmt.Errorf(`ent: validator failed for field "FXRate.scope": %w`, err)}
 		}
 	}
-	if v, ok := fru.mutation.ScopeID(); ok {
+	if v, ok := _u.mutation.ScopeID(); ok {
 		if err := fxrate.ScopeIDValidator(v); err != nil {
 			return &ValidationError{Name: "scope_id", err: fmt.Errorf(`ent: validator failed for field "FXRate.scope_id": %w`, err)}
 		}
 	}
-	if v, ok := fru.mutation.FromCurrency(); ok {
+	if v, ok := _u.mutation.FromCurrency(); ok {
 		if err := fxrate.FromCurrencyValidator(v); err != nil {
 			return &ValidationError{Name: "from_currency", err: fmt.Errorf(`ent: validator failed for field "FXRate.from_currency": %w`, err)}
 		}
 	}
-	if v, ok := fru.mutation.ToCurrency(); ok {
+	if v, ok := _u.mutation.ToCurrency(); ok {
 		if err := fxrate.ToCurrencyValidator(v); err != nil {
 			return &ValidationError{Name: "to_currency", err: fmt.Errorf(`ent: validator failed for field "FXRate.to_currency": %w`, err)}
 		}
@@ -257,70 +257,70 @@ func (fru *FXRateUpdate) check() error {
 	return nil
 }
 
-func (fru *FXRateUpdate) sqlSave(ctx context.Context) (n int, err error) {
-	if err := fru.check(); err != nil {
-		return n, err
+func (_u *FXRateUpdate) sqlSave(ctx context.Context) (_node int, err error) {
+	if err := _u.check(); err != nil {
+		return _node, err
 	}
 	_spec := sqlgraph.NewUpdateSpec(fxrate.Table, fxrate.Columns, sqlgraph.NewFieldSpec(fxrate.FieldID, field.TypeString))
-	if ps := fru.mutation.predicates; len(ps) > 0 {
+	if ps := _u.mutation.predicates; len(ps) > 0 {
 		_spec.Predicate = func(selector *sql.Selector) {
 			for i := range ps {
 				ps[i](selector)
 			}
 		}
 	}
-	if value, ok := fru.mutation.Status(); ok {
+	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(fxrate.FieldStatus, field.TypeString, value)
 	}
-	if value, ok := fru.mutation.UpdatedAt(); ok {
+	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(fxrate.FieldUpdatedAt, field.TypeTime, value)
 	}
-	if fru.mutation.CreatedByCleared() {
+	if _u.mutation.CreatedByCleared() {
 		_spec.ClearField(fxrate.FieldCreatedBy, field.TypeString)
 	}
-	if value, ok := fru.mutation.UpdatedBy(); ok {
+	if value, ok := _u.mutation.UpdatedBy(); ok {
 		_spec.SetField(fxrate.FieldUpdatedBy, field.TypeString, value)
 	}
-	if fru.mutation.UpdatedByCleared() {
+	if _u.mutation.UpdatedByCleared() {
 		_spec.ClearField(fxrate.FieldUpdatedBy, field.TypeString)
 	}
-	if fru.mutation.EnvironmentIDCleared() {
+	if _u.mutation.EnvironmentIDCleared() {
 		_spec.ClearField(fxrate.FieldEnvironmentID, field.TypeString)
 	}
-	if value, ok := fru.mutation.Scope(); ok {
+	if value, ok := _u.mutation.Scope(); ok {
 		_spec.SetField(fxrate.FieldScope, field.TypeString, value)
 	}
-	if value, ok := fru.mutation.ScopeID(); ok {
+	if value, ok := _u.mutation.ScopeID(); ok {
 		_spec.SetField(fxrate.FieldScopeID, field.TypeString, value)
 	}
-	if value, ok := fru.mutation.FromCurrency(); ok {
+	if value, ok := _u.mutation.FromCurrency(); ok {
 		_spec.SetField(fxrate.FieldFromCurrency, field.TypeString, value)
 	}
-	if value, ok := fru.mutation.ToCurrency(); ok {
+	if value, ok := _u.mutation.ToCurrency(); ok {
 		_spec.SetField(fxrate.FieldToCurrency, field.TypeString, value)
 	}
-	if value, ok := fru.mutation.Rate(); ok {
+	if value, ok := _u.mutation.Rate(); ok {
 		_spec.SetField(fxrate.FieldRate, field.TypeOther, value)
 	}
-	if value, ok := fru.mutation.ValidFrom(); ok {
+	if value, ok := _u.mutation.ValidFrom(); ok {
 		_spec.SetField(fxrate.FieldValidFrom, field.TypeTime, value)
 	}
-	if fru.mutation.ValidFromCleared() {
+	if _u.mutation.ValidFromCleared() {
 		_spec.ClearField(fxrate.FieldValidFrom, field.TypeTime)
 	}
-	if value, ok := fru.mutation.ValidTo(); ok {
+	if value, ok := _u.mutation.ValidTo(); ok {
 		_spec.SetField(fxrate.FieldValidTo, field.TypeTime, value)
 	}
-	if fru.mutation.ValidToCleared() {
+	if _u.mutation.ValidToCleared() {
 		_spec.ClearField(fxrate.FieldValidTo, field.TypeTime)
 	}
-	if value, ok := fru.mutation.Metadata(); ok {
+	if value, ok := _u.mutation.Metadata(); ok {
 		_spec.SetField(fxrate.FieldMetadata, field.TypeJSON, value)
 	}
-	if fru.mutation.MetadataCleared() {
+	if _u.mutation.MetadataCleared() {
 		_spec.ClearField(fxrate.FieldMetadata, field.TypeJSON)
 	}
-	if n, err = sqlgraph.UpdateNodes(ctx, fru.driver, _spec); err != nil {
+	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
 			err = &NotFoundError{fxrate.Label}
 		} else if sqlgraph.IsConstraintError(err) {
@@ -328,8 +328,8 @@ func (fru *FXRateUpdate) sqlSave(ctx context.Context) (n int, err error) {
 		}
 		return 0, err
 	}
-	fru.mutation.done = true
-	return n, nil
+	_u.mutation.done = true
+	return _node, nil
 }
 
 // FXRateUpdateOne is the builder for updating a single FXRate entity.
@@ -341,194 +341,194 @@ type FXRateUpdateOne struct {
 }
 
 // SetStatus sets the "status" field.
-func (fruo *FXRateUpdateOne) SetStatus(s string) *FXRateUpdateOne {
-	fruo.mutation.SetStatus(s)
-	return fruo
+func (_u *FXRateUpdateOne) SetStatus(v string) *FXRateUpdateOne {
+	_u.mutation.SetStatus(v)
+	return _u
 }
 
 // SetNillableStatus sets the "status" field if the given value is not nil.
-func (fruo *FXRateUpdateOne) SetNillableStatus(s *string) *FXRateUpdateOne {
-	if s != nil {
-		fruo.SetStatus(*s)
+func (_u *FXRateUpdateOne) SetNillableStatus(v *string) *FXRateUpdateOne {
+	if v != nil {
+		_u.SetStatus(*v)
 	}
-	return fruo
+	return _u
 }
 
 // SetUpdatedAt sets the "updated_at" field.
-func (fruo *FXRateUpdateOne) SetUpdatedAt(t time.Time) *FXRateUpdateOne {
-	fruo.mutation.SetUpdatedAt(t)
-	return fruo
+func (_u *FXRateUpdateOne) SetUpdatedAt(v time.Time) *FXRateUpdateOne {
+	_u.mutation.SetUpdatedAt(v)
+	return _u
 }
 
 // SetUpdatedBy sets the "updated_by" field.
-func (fruo *FXRateUpdateOne) SetUpdatedBy(s string) *FXRateUpdateOne {
-	fruo.mutation.SetUpdatedBy(s)
-	return fruo
+func (_u *FXRateUpdateOne) SetUpdatedBy(v string) *FXRateUpdateOne {
+	_u.mutation.SetUpdatedBy(v)
+	return _u
 }
 
 // SetNillableUpdatedBy sets the "updated_by" field if the given value is not nil.
-func (fruo *FXRateUpdateOne) SetNillableUpdatedBy(s *string) *FXRateUpdateOne {
-	if s != nil {
-		fruo.SetUpdatedBy(*s)
+func (_u *FXRateUpdateOne) SetNillableUpdatedBy(v *string) *FXRateUpdateOne {
+	if v != nil {
+		_u.SetUpdatedBy(*v)
 	}
-	return fruo
+	return _u
 }
 
 // ClearUpdatedBy clears the value of the "updated_by" field.
-func (fruo *FXRateUpdateOne) ClearUpdatedBy() *FXRateUpdateOne {
-	fruo.mutation.ClearUpdatedBy()
-	return fruo
+func (_u *FXRateUpdateOne) ClearUpdatedBy() *FXRateUpdateOne {
+	_u.mutation.ClearUpdatedBy()
+	return _u
 }
 
 // SetScope sets the "scope" field.
-func (fruo *FXRateUpdateOne) SetScope(s string) *FXRateUpdateOne {
-	fruo.mutation.SetScope(s)
-	return fruo
+func (_u *FXRateUpdateOne) SetScope(v string) *FXRateUpdateOne {
+	_u.mutation.SetScope(v)
+	return _u
 }
 
 // SetNillableScope sets the "scope" field if the given value is not nil.
-func (fruo *FXRateUpdateOne) SetNillableScope(s *string) *FXRateUpdateOne {
-	if s != nil {
-		fruo.SetScope(*s)
+func (_u *FXRateUpdateOne) SetNillableScope(v *string) *FXRateUpdateOne {
+	if v != nil {
+		_u.SetScope(*v)
 	}
-	return fruo
+	return _u
 }
 
 // SetScopeID sets the "scope_id" field.
-func (fruo *FXRateUpdateOne) SetScopeID(s string) *FXRateUpdateOne {
-	fruo.mutation.SetScopeID(s)
-	return fruo
+func (_u *FXRateUpdateOne) SetScopeID(v string) *FXRateUpdateOne {
+	_u.mutation.SetScopeID(v)
+	return _u
 }
 
 // SetNillableScopeID sets the "scope_id" field if the given value is not nil.
-func (fruo *FXRateUpdateOne) SetNillableScopeID(s *string) *FXRateUpdateOne {
-	if s != nil {
-		fruo.SetScopeID(*s)
+func (_u *FXRateUpdateOne) SetNillableScopeID(v *string) *FXRateUpdateOne {
+	if v != nil {
+		_u.SetScopeID(*v)
 	}
-	return fruo
+	return _u
 }
 
 // SetFromCurrency sets the "from_currency" field.
-func (fruo *FXRateUpdateOne) SetFromCurrency(s string) *FXRateUpdateOne {
-	fruo.mutation.SetFromCurrency(s)
-	return fruo
+func (_u *FXRateUpdateOne) SetFromCurrency(v string) *FXRateUpdateOne {
+	_u.mutation.SetFromCurrency(v)
+	return _u
 }
 
 // SetNillableFromCurrency sets the "from_currency" field if the given value is not nil.
-func (fruo *FXRateUpdateOne) SetNillableFromCurrency(s *string) *FXRateUpdateOne {
-	if s != nil {
-		fruo.SetFromCurrency(*s)
+func (_u *FXRateUpdateOne) SetNillableFromCurrency(v *string) *FXRateUpdateOne {
+	if v != nil {
+		_u.SetFromCurrency(*v)
 	}
-	return fruo
+	return _u
 }
 
 // SetToCurrency sets the "to_currency" field.
-func (fruo *FXRateUpdateOne) SetToCurrency(s string) *FXRateUpdateOne {
-	fruo.mutation.SetToCurrency(s)
-	return fruo
+func (_u *FXRateUpdateOne) SetToCurrency(v string) *FXRateUpdateOne {
+	_u.mutation.SetToCurrency(v)
+	return _u
 }
 
 // SetNillableToCurrency sets the "to_currency" field if the given value is not nil.
-func (fruo *FXRateUpdateOne) SetNillableToCurrency(s *string) *FXRateUpdateOne {
-	if s != nil {
-		fruo.SetToCurrency(*s)
+func (_u *FXRateUpdateOne) SetNillableToCurrency(v *string) *FXRateUpdateOne {
+	if v != nil {
+		_u.SetToCurrency(*v)
 	}
-	return fruo
+	return _u
 }
 
 // SetRate sets the "rate" field.
-func (fruo *FXRateUpdateOne) SetRate(d decimal.Decimal) *FXRateUpdateOne {
-	fruo.mutation.SetRate(d)
-	return fruo
+func (_u *FXRateUpdateOne) SetRate(v decimal.Decimal) *FXRateUpdateOne {
+	_u.mutation.SetRate(v)
+	return _u
 }
 
 // SetNillableRate sets the "rate" field if the given value is not nil.
-func (fruo *FXRateUpdateOne) SetNillableRate(d *decimal.Decimal) *FXRateUpdateOne {
-	if d != nil {
-		fruo.SetRate(*d)
+func (_u *FXRateUpdateOne) SetNillableRate(v *decimal.Decimal) *FXRateUpdateOne {
+	if v != nil {
+		_u.SetRate(*v)
 	}
-	return fruo
+	return _u
 }
 
 // SetValidFrom sets the "valid_from" field.
-func (fruo *FXRateUpdateOne) SetValidFrom(t time.Time) *FXRateUpdateOne {
-	fruo.mutation.SetValidFrom(t)
-	return fruo
+func (_u *FXRateUpdateOne) SetValidFrom(v time.Time) *FXRateUpdateOne {
+	_u.mutation.SetValidFrom(v)
+	return _u
 }
 
 // SetNillableValidFrom sets the "valid_from" field if the given value is not nil.
-func (fruo *FXRateUpdateOne) SetNillableValidFrom(t *time.Time) *FXRateUpdateOne {
-	if t != nil {
-		fruo.SetValidFrom(*t)
+func (_u *FXRateUpdateOne) SetNillableValidFrom(v *time.Time) *FXRateUpdateOne {
+	if v != nil {
+		_u.SetValidFrom(*v)
 	}
-	return fruo
+	return _u
 }
 
 // ClearValidFrom clears the value of the "valid_from" field.
-func (fruo *FXRateUpdateOne) ClearValidFrom() *FXRateUpdateOne {
-	fruo.mutation.ClearValidFrom()
-	return fruo
+func (_u *FXRateUpdateOne) ClearValidFrom() *FXRateUpdateOne {
+	_u.mutation.ClearValidFrom()
+	return _u
 }
 
 // SetValidTo sets the "valid_to" field.
-func (fruo *FXRateUpdateOne) SetValidTo(t time.Time) *FXRateUpdateOne {
-	fruo.mutation.SetValidTo(t)
-	return fruo
+func (_u *FXRateUpdateOne) SetValidTo(v time.Time) *FXRateUpdateOne {
+	_u.mutation.SetValidTo(v)
+	return _u
 }
 
 // SetNillableValidTo sets the "valid_to" field if the given value is not nil.
-func (fruo *FXRateUpdateOne) SetNillableValidTo(t *time.Time) *FXRateUpdateOne {
-	if t != nil {
-		fruo.SetValidTo(*t)
+func (_u *FXRateUpdateOne) SetNillableValidTo(v *time.Time) *FXRateUpdateOne {
+	if v != nil {
+		_u.SetValidTo(*v)
 	}
-	return fruo
+	return _u
 }
 
 // ClearValidTo clears the value of the "valid_to" field.
-func (fruo *FXRateUpdateOne) ClearValidTo() *FXRateUpdateOne {
-	fruo.mutation.ClearValidTo()
-	return fruo
+func (_u *FXRateUpdateOne) ClearValidTo() *FXRateUpdateOne {
+	_u.mutation.ClearValidTo()
+	return _u
 }
 
 // SetMetadata sets the "metadata" field.
-func (fruo *FXRateUpdateOne) SetMetadata(m map[string]string) *FXRateUpdateOne {
-	fruo.mutation.SetMetadata(m)
-	return fruo
+func (_u *FXRateUpdateOne) SetMetadata(v map[string]string) *FXRateUpdateOne {
+	_u.mutation.SetMetadata(v)
+	return _u
 }
 
 // ClearMetadata clears the value of the "metadata" field.
-func (fruo *FXRateUpdateOne) ClearMetadata() *FXRateUpdateOne {
-	fruo.mutation.ClearMetadata()
-	return fruo
+func (_u *FXRateUpdateOne) ClearMetadata() *FXRateUpdateOne {
+	_u.mutation.ClearMetadata()
+	return _u
 }
 
 // Mutation returns the FXRateMutation object of the builder.
-func (fruo *FXRateUpdateOne) Mutation() *FXRateMutation {
-	return fruo.mutation
+func (_u *FXRateUpdateOne) Mutation() *FXRateMutation {
+	return _u.mutation
 }
 
 // Where appends a list predicates to the FXRateUpdate builder.
-func (fruo *FXRateUpdateOne) Where(ps ...predicate.FXRate) *FXRateUpdateOne {
-	fruo.mutation.Where(ps...)
-	return fruo
+func (_u *FXRateUpdateOne) Where(ps ...predicate.FXRate) *FXRateUpdateOne {
+	_u.mutation.Where(ps...)
+	return _u
 }
 
 // Select allows selecting one or more fields (columns) of the returned entity.
 // The default is selecting all fields defined in the entity schema.
-func (fruo *FXRateUpdateOne) Select(field string, fields ...string) *FXRateUpdateOne {
-	fruo.fields = append([]string{field}, fields...)
-	return fruo
+func (_u *FXRateUpdateOne) Select(field string, fields ...string) *FXRateUpdateOne {
+	_u.fields = append([]string{field}, fields...)
+	return _u
 }
 
 // Save executes the query and returns the updated FXRate entity.
-func (fruo *FXRateUpdateOne) Save(ctx context.Context) (*FXRate, error) {
-	fruo.defaults()
-	return withHooks(ctx, fruo.sqlSave, fruo.mutation, fruo.hooks)
+func (_u *FXRateUpdateOne) Save(ctx context.Context) (*FXRate, error) {
+	_u.defaults()
+	return withHooks(ctx, _u.sqlSave, _u.mutation, _u.hooks)
 }
 
 // SaveX is like Save, but panics if an error occurs.
-func (fruo *FXRateUpdateOne) SaveX(ctx context.Context) *FXRate {
-	node, err := fruo.Save(ctx)
+func (_u *FXRateUpdateOne) SaveX(ctx context.Context) *FXRate {
+	node, err := _u.Save(ctx)
 	if err != nil {
 		panic(err)
 	}
@@ -536,44 +536,44 @@ func (fruo *FXRateUpdateOne) SaveX(ctx context.Context) *FXRate {
 }
 
 // Exec executes the query on the entity.
-func (fruo *FXRateUpdateOne) Exec(ctx context.Context) error {
-	_, err := fruo.Save(ctx)
+func (_u *FXRateUpdateOne) Exec(ctx context.Context) error {
+	_, err := _u.Save(ctx)
 	return err
 }
 
 // ExecX is like Exec, but panics if an error occurs.
-func (fruo *FXRateUpdateOne) ExecX(ctx context.Context) {
-	if err := fruo.Exec(ctx); err != nil {
+func (_u *FXRateUpdateOne) ExecX(ctx context.Context) {
+	if err := _u.Exec(ctx); err != nil {
 		panic(err)
 	}
 }
 
 // defaults sets the default values of the builder before save.
-func (fruo *FXRateUpdateOne) defaults() {
-	if _, ok := fruo.mutation.UpdatedAt(); !ok {
+func (_u *FXRateUpdateOne) defaults() {
+	if _, ok := _u.mutation.UpdatedAt(); !ok {
 		v := fxrate.UpdateDefaultUpdatedAt()
-		fruo.mutation.SetUpdatedAt(v)
+		_u.mutation.SetUpdatedAt(v)
 	}
 }
 
 // check runs all checks and user-defined validators on the builder.
-func (fruo *FXRateUpdateOne) check() error {
-	if v, ok := fruo.mutation.Scope(); ok {
+func (_u *FXRateUpdateOne) check() error {
+	if v, ok := _u.mutation.Scope(); ok {
 		if err := fxrate.ScopeValidator(v); err != nil {
 			return &ValidationError{Name: "scope", err: fmt.Errorf(`ent: validator failed for field "FXRate.scope": %w`, err)}
 		}
 	}
-	if v, ok := fruo.mutation.ScopeID(); ok {
+	if v, ok := _u.mutation.ScopeID(); ok {
 		if err := fxrate.ScopeIDValidator(v); err != nil {
 			return &ValidationError{Name: "scope_id", err: fmt.Errorf(`ent: validator failed for field "FXRate.scope_id": %w`, err)}
 		}
 	}
-	if v, ok := fruo.mutation.FromCurrency(); ok {
+	if v, ok := _u.mutation.FromCurrency(); ok {
 		if err := fxrate.FromCurrencyValidator(v); err != nil {
 			return &ValidationError{Name: "from_currency", err: fmt.Errorf(`ent: validator failed for field "FXRate.from_currency": %w`, err)}
 		}
 	}
-	if v, ok := fruo.mutation.ToCurrency(); ok {
+	if v, ok := _u.mutation.ToCurrency(); ok {
 		if err := fxrate.ToCurrencyValidator(v); err != nil {
 			return &ValidationError{Name: "to_currency", err: fmt.Errorf(`ent: validator failed for field "FXRate.to_currency": %w`, err)}
 		}
@@ -581,17 +581,17 @@ func (fruo *FXRateUpdateOne) check() error {
 	return nil
 }
 
-func (fruo *FXRateUpdateOne) sqlSave(ctx context.Context) (_node *FXRate, err error) {
-	if err := fruo.check(); err != nil {
+func (_u *FXRateUpdateOne) sqlSave(ctx context.Context) (_node *FXRate, err error) {
+	if err := _u.check(); err != nil {
 		return _node, err
 	}
 	_spec := sqlgraph.NewUpdateSpec(fxrate.Table, fxrate.Columns, sqlgraph.NewFieldSpec(fxrate.FieldID, field.TypeString))
-	id, ok := fruo.mutation.ID()
+	id, ok := _u.mutation.ID()
 	if !ok {
 		return nil, &ValidationError{Name: "id", err: errors.New(`ent: missing "FXRate.id" for update`)}
 	}
 	_spec.Node.ID.Value = id
-	if fields := fruo.fields; len(fields) > 0 {
+	if fields := _u.fields; len(fields) > 0 {
 		_spec.Node.Columns = make([]string, 0, len(fields))
 		_spec.Node.Columns = append(_spec.Node.Columns, fxrate.FieldID)
 		for _, f := range fields {
@@ -603,68 +603,68 @@ func (fruo *FXRateUpdateOne) sqlSave(ctx context.Context) (_node *FXRate, err er
 			}
 		}
 	}
-	if ps := fruo.mutation.predicates; len(ps) > 0 {
+	if ps := _u.mutation.predicates; len(ps) > 0 {
 		_spec.Predicate = func(selector *sql.Selector) {
 			for i := range ps {
 				ps[i](selector)
 			}
 		}
 	}
-	if value, ok := fruo.mutation.Status(); ok {
+	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(fxrate.FieldStatus, field.TypeString, value)
 	}
-	if value, ok := fruo.mutation.UpdatedAt(); ok {
+	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(fxrate.FieldUpdatedAt, field.TypeTime, value)
 	}
-	if fruo.mutation.CreatedByCleared() {
+	if _u.mutation.CreatedByCleared() {
 		_spec.ClearField(fxrate.FieldCreatedBy, field.TypeString)
 	}
-	if value, ok := fruo.mutation.UpdatedBy(); ok {
+	if value, ok := _u.mutation.UpdatedBy(); ok {
 		_spec.SetField(fxrate.FieldUpdatedBy, field.TypeString, value)
 	}
-	if fruo.mutation.UpdatedByCleared() {
+	if _u.mutation.UpdatedByCleared() {
 		_spec.ClearField(fxrate.FieldUpdatedBy, field.TypeString)
 	}
-	if fruo.mutation.EnvironmentIDCleared() {
+	if _u.mutation.EnvironmentIDCleared() {
 		_spec.ClearField(fxrate.FieldEnvironmentID, field.TypeString)
 	}
-	if value, ok := fruo.mutation.Scope(); ok {
+	if value, ok := _u.mutation.Scope(); ok {
 		_spec.SetField(fxrate.FieldScope, field.TypeString, value)
 	}
-	if value, ok := fruo.mutation.ScopeID(); ok {
+	if value, ok := _u.mutation.ScopeID(); ok {
 		_spec.SetField(fxrate.FieldScopeID, field.TypeString, value)
 	}
-	if value, ok := fruo.mutation.FromCurrency(); ok {
+	if value, ok := _u.mutation.FromCurrency(); ok {
 		_spec.SetField(fxrate.FieldFromCurrency, field.TypeString, value)
 	}
-	if value, ok := fruo.mutation.ToCurrency(); ok {
+	if value, ok := _u.mutation.ToCurrency(); ok {
 		_spec.SetField(fxrate.FieldToCurrency, field.TypeString, value)
 	}
-	if value, ok := fruo.mutation.Rate(); ok {
+	if value, ok := _u.mutation.Rate(); ok {
 		_spec.SetField(fxrate.FieldRate, field.TypeOther, value)
 	}
-	if value, ok := fruo.mutation.ValidFrom(); ok {
+	if value, ok := _u.mutation.ValidFrom(); ok {
 		_spec.SetField(fxrate.FieldValidFrom, field.TypeTime, value)
 	}
-	if fruo.mutation.ValidFromCleared() {
+	if _u.mutation.ValidFromCleared() {
 		_spec.ClearField(fxrate.FieldValidFrom, field.TypeTime)
 	}
-	if value, ok := fruo.mutation.ValidTo(); ok {
+	if value, ok := _u.mutation.ValidTo(); ok {
 		_spec.SetField(fxrate.FieldValidTo, field.TypeTime, value)
 	}
-	if fruo.mutation.ValidToCleared() {
+	if _u.mutation.ValidToCleared() {
 		_spec.ClearField(fxrate.FieldValidTo, field.TypeTime)
 	}
-	if value, ok := fruo.mutation.Metadata(); ok {
+	if value, ok := _u.mutation.Metadata(); ok {
 		_spec.SetField(fxrate.FieldMetadata, field.TypeJSON, value)
 	}
-	if fruo.mutation.MetadataCleared() {
+	if _u.mutation.MetadataCleared() {
 		_spec.ClearField(fxrate.FieldMetadata, field.TypeJSON)
 	}
-	_node = &FXRate{config: fruo.config}
+	_node = &FXRate{config: _u.config}
 	_spec.Assign = _node.assignValues
 	_spec.ScanValues = _node.scanValues
-	if err = sqlgraph.UpdateNode(ctx, fruo.driver, _spec); err != nil {
+	if err = sqlgraph.UpdateNode(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
 			err = &NotFoundError{fxrate.Label}
 		} else if sqlgraph.IsConstraintError(err) {
@@ -672,6 +672,6 @@ func (fruo *FXRateUpdateOne) sqlSave(ctx context.Context) (_node *FXRate, err er
 		}
 		return nil, err
 	}
-	fruo.mutation.done = true
+	_u.mutation.done = true
 	return _node, nil
 }

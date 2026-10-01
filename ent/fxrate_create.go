@@ -22,179 +22,179 @@ type FXRateCreate struct {
 }
 
 // SetTenantID sets the "tenant_id" field.
-func (frc *FXRateCreate) SetTenantID(s string) *FXRateCreate {
-	frc.mutation.SetTenantID(s)
-	return frc
+func (_c *FXRateCreate) SetTenantID(v string) *FXRateCreate {
+	_c.mutation.SetTenantID(v)
+	return _c
 }
 
 // SetStatus sets the "status" field.
-func (frc *FXRateCreate) SetStatus(s string) *FXRateCreate {
-	frc.mutation.SetStatus(s)
-	return frc
+func (_c *FXRateCreate) SetStatus(v string) *FXRateCreate {
+	_c.mutation.SetStatus(v)
+	return _c
 }
 
 // SetNillableStatus sets the "status" field if the given value is not nil.
-func (frc *FXRateCreate) SetNillableStatus(s *string) *FXRateCreate {
-	if s != nil {
-		frc.SetStatus(*s)
+func (_c *FXRateCreate) SetNillableStatus(v *string) *FXRateCreate {
+	if v != nil {
+		_c.SetStatus(*v)
 	}
-	return frc
+	return _c
 }
 
 // SetCreatedAt sets the "created_at" field.
-func (frc *FXRateCreate) SetCreatedAt(t time.Time) *FXRateCreate {
-	frc.mutation.SetCreatedAt(t)
-	return frc
+func (_c *FXRateCreate) SetCreatedAt(v time.Time) *FXRateCreate {
+	_c.mutation.SetCreatedAt(v)
+	return _c
 }
 
 // SetNillableCreatedAt sets the "created_at" field if the given value is not nil.
-func (frc *FXRateCreate) SetNillableCreatedAt(t *time.Time) *FXRateCreate {
-	if t != nil {
-		frc.SetCreatedAt(*t)
+func (_c *FXRateCreate) SetNillableCreatedAt(v *time.Time) *FXRateCreate {
+	if v != nil {
+		_c.SetCreatedAt(*v)
 	}
-	return frc
+	return _c
 }
 
 // SetUpdatedAt sets the "updated_at" field.
-func (frc *FXRateCreate) SetUpdatedAt(t time.Time) *FXRateCreate {
-	frc.mutation.SetUpdatedAt(t)
-	return frc
+func (_c *FXRateCreate) SetUpdatedAt(v time.Time) *FXRateCreate {
+	_c.mutation.SetUpdatedAt(v)
+	return _c
 }
 
 // SetNillableUpdatedAt sets the "updated_at" field if the given value is not nil.
-func (frc *FXRateCreate) SetNillableUpdatedAt(t *time.Time) *FXRateCreate {
-	if t != nil {
-		frc.SetUpdatedAt(*t)
+func (_c *FXRateCreate) SetNillableUpdatedAt(v *time.Time) *FXRateCreate {
+	if v != nil {
+		_c.SetUpdatedAt(*v)
 	}
-	return frc
+	return _c
 }
 
 // SetCreatedBy sets the "created_by" field.
-func (frc *FXRateCreate) SetCreatedBy(s string) *FXRateCreate {
-	frc.mutation.SetCreatedBy(s)
-	return frc
+func (_c *FXRateCreate) SetCreatedBy(v string) *FXRateCreate {
+	_c.mutation.SetCreatedBy(v)
+	return _c
 }
 
 // SetNillableCreatedBy sets the "created_by" field if the given value is not nil.
-func (frc *FXRateCreate) SetNillableCreatedBy(s *string) *FXRateCreate {
-	if s != nil {
-		frc.SetCreatedBy(*s)
+func (_c *FXRateCreate) SetNillableCreatedBy(v *string) *FXRateCreate {
+	if v != nil {
+		_c.SetCreatedBy(*v)
 	}
-	return frc
+	return _c
 }
 
 // SetUpdatedBy sets the "updated_by" field.
-func (frc *FXRateCreate) SetUpdatedBy(s string) *FXRateCreate {
-	frc.mutation.SetUpdatedBy(s)
-	return frc
+func (_c *FXRateCreate) SetUpdatedBy(v string) *FXRateCreate {
+	_c.mutation.SetUpdatedBy(v)
+	return _c
 }
 
 // SetNillableUpdatedBy sets the "updated_by" field if the given value is not nil.
-func (frc *FXRateCreate) SetNillableUpdatedBy(s *string) *FXRateCreate {
-	if s != nil {
-		frc.SetUpdatedBy(*s)
+func (_c *FXRateCreate) SetNillableUpdatedBy(v *string) *FXRateCreate {
+	if v != nil {
+		_c.SetUpdatedBy(*v)
 	}
-	return frc
+	return _c
 }
 
 // SetEnvironmentID sets the "environment_id" field.
-func (frc *FXRateCreate) SetEnvironmentID(s string) *FXRateCreate {
-	frc.mutation.SetEnvironmentID(s)
-	return frc
+func (_c *FXRateCreate) SetEnvironmentID(v string) *FXRateCreate {
+	_c.mutation.SetEnvironmentID(v)
+	return _c
 }
 
 // SetNillableEnvironmentID sets the "environment_id" field if the given value is not nil.
-func (frc *FXRateCreate) SetNillableEnvironmentID(s *string) *FXRateCreate {
-	if s != nil {
-		frc.SetEnvironmentID(*s)
+func (_c *FXRateCreate) SetNillableEnvironmentID(v *string) *FXRateCreate {
+	if v != nil {
+		_c.SetEnvironmentID(*v)
 	}
-	return frc
+	return _c
 }
 
 // SetScope sets the "scope" field.
-func (frc *FXRateCreate) SetScope(s string) *FXRateCreate {
-	frc.mutation.SetScope(s)
-	return frc
+func (_c *FXRateCreate) SetScope(v string) *FXRateCreate {
+	_c.mutation.SetScope(v)
+	return _c
 }
 
 // SetScopeID sets the "scope_id" field.
-func (frc *FXRateCreate) SetScopeID(s string) *FXRateCreate {
-	frc.mutation.SetScopeID(s)
-	return frc
+func (_c *FXRateCreate) SetScopeID(v string) *FXRateCreate {
+	_c.mutation.SetScopeID(v)
+	return _c
 }
 
 // SetFromCurrency sets the "from_currency" field.
-func (frc *FXRateCreate) SetFromCurrency(s string) *FXRateCreate {
-	frc.mutation.SetFromCurrency(s)
-	return frc
+func (_c *FXRateCreate) SetFromCurrency(v string) *FXRateCreate {
+	_c.mutation.SetFromCurrency(v)
+	return _c
 }
 
 // SetToCurrency sets the "to_currency" field.
-func (frc *FXRateCreate) SetToCurrency(s string) *FXRateCreate {
-	frc.mutation.SetToCurrency(s)
-	return frc
+func (_c *FXRateCreate) SetToCurrency(v string) *FXRateCreate {
+	_c.mutation.SetToCurrency(v)
+	return _c
 }
 
 // SetRate sets the "rate" field.
-func (frc *FXRateCreate) SetRate(d decimal.Decimal) *FXRateCreate {
-	frc.mutation.SetRate(d)
-	return frc
+func (_c *FXRateCreate) SetRate(v decimal.Decimal) *FXRateCreate {
+	_c.mutation.SetRate(v)
+	return _c
 }
 
 // SetValidFrom sets the "valid_from" field.
-func (frc *FXRateCreate) SetValidFrom(t time.Time) *FXRateCreate {
-	frc.mutation.SetValidFrom(t)
-	return frc
+func (_c *FXRateCreate) SetValidFrom(v time.Time) *FXRateCreate {
+	_c.mutation.SetValidFrom(v)
+	return _c
 }
 
 // SetNillableValidFrom sets the "valid_from" field if the given value is not nil.
-func (frc *FXRateCreate) SetNillableValidFrom(t *time.Time) *FXRateCreate {
-	if t != nil {
-		frc.SetValidFrom(*t)
+func (_c *FXRateCreate) SetNillableValidFrom(v *time.Time) *FXRateCreate {
+	if v != nil {
+		_c.SetValidFrom(*v)
 	}
-	return frc
+	return _c
 }
 
 // SetValidTo sets the "valid_to" field.
-func (frc *FXRateCreate) SetValidTo(t time.Time) *FXRateCreate {
-	frc.mutation.SetValidTo(t)
-	return frc
+func (_c *FXRateCreate) SetValidTo(v time.Time) *FXRateCreate {
+	_c.mutation.SetValidTo(v)
+	return _c
 }
 
 // SetNillableValidTo sets the "valid_to" field if the given value is not nil.
-func (frc *FXRateCreate) SetNillableValidTo(t *time.Time) *FXRateCreate {
-	if t != nil {
-		frc.SetValidTo(*t)
+func (_c *FXRateCreate) SetNillableValidTo(v *time.Time) *FXRateCreate {
+	if v != nil {
+		_c.SetValidTo(*v)
 	}
-	return frc
+	return _c
 }
 
 // SetMetadata sets the "metadata" field.
-func (frc *FXRateCreate) SetMetadata(m map[string]string) *FXRateCreate {
-	frc.mutation.SetMetadata(m)
-	return frc
+func (_c *FXRateCreate) SetMetadata(v map[string]string) *FXRateCreate {
+	_c.mutation.SetMetadata(v)
+	return _c
 }
 
 // SetID sets the "id" field.
-func (frc *FXRateCreate) SetID(s string) *FXRateCreate {
-	frc.mutation.SetID(s)
-	return frc
+func (_c *FXRateCreate) SetID(v string) *FXRateCreate {
+	_c.mutation.SetID(v)
+	return _c
 }
 
 // Mutation returns the FXRateMutation object of the builder.
-func (frc *FXRateCreate) Mutation() *FXRateMutation {
-	return frc.mutation
+func (_c *FXRateCreate) Mutation() *FXRateMutation {
+	return _c.mutation
 }
 
 // Save creates the FXRate in the database.
-func (frc *FXRateCreate) Save(ctx context.Context) (*FXRate, error) {
-	frc.defaults()
-	return withHooks(ctx, frc.sqlSave, frc.mutation, frc.hooks)
+func (_c *FXRateCreate) Save(ctx context.Context) (*FXRate, error) {
+	_c.defaults()
+	return withHooks(ctx, _c.sqlSave, _c.mutation, _c.hooks)
 }
 
 // SaveX calls Save and panics if Save returns an error.
-func (frc *FXRateCreate) SaveX(ctx context.Context) *FXRate {
-	v, err := frc.Save(ctx)
+func (_c *FXRateCreate) SaveX(ctx context.Context) *FXRate {
+	v, err := _c.Save(ctx)
 	if err != nil {
 		panic(err)
 	}
@@ -202,101 +202,101 @@ func (frc *FXRateCreate) SaveX(ctx context.Context) *FXRate {
 }
 
 // Exec executes the query.
-func (frc *FXRateCreate) Exec(ctx context.Context) error {
-	_, err := frc.Save(ctx)
+func (_c *FXRateCreate) Exec(ctx context.Context) error {
+	_, err := _c.Save(ctx)
 	return err
 }
 
 // ExecX is like Exec, but panics if an error occurs.
-func (frc *FXRateCreate) ExecX(ctx context.Context) {
-	if err := frc.Exec(ctx); err != nil {
+func (_c *FXRateCreate) ExecX(ctx context.Context) {
+	if err := _c.Exec(ctx); err != nil {
 		panic(err)
 	}
 }
 
 // defaults sets the default values of the builder before save.
-func (frc *FXRateCreate) defaults() {
-	if _, ok := frc.mutation.Status(); !ok {
+func (_c *FXRateCreate) defaults() {
+	if _, ok := _c.mutation.Status(); !ok {
 		v := fxrate.DefaultStatus
-		frc.mutation.SetStatus(v)
+		_c.mutation.SetStatus(v)
 	}
-	if _, ok := frc.mutation.CreatedAt(); !ok {
+	if _, ok := _c.mutation.CreatedAt(); !ok {
 		v := fxrate.DefaultCreatedAt()
-		frc.mutation.SetCreatedAt(v)
+		_c.mutation.SetCreatedAt(v)
 	}
-	if _, ok := frc.mutation.UpdatedAt(); !ok {
+	if _, ok := _c.mutation.UpdatedAt(); !ok {
 		v := fxrate.DefaultUpdatedAt()
-		frc.mutation.SetUpdatedAt(v)
+		_c.mutation.SetUpdatedAt(v)
 	}
-	if _, ok := frc.mutation.EnvironmentID(); !ok {
+	if _, ok := _c.mutation.EnvironmentID(); !ok {
 		v := fxrate.DefaultEnvironmentID
-		frc.mutation.SetEnvironmentID(v)
+		_c.mutation.SetEnvironmentID(v)
 	}
 }
 
 // check runs all checks and user-defined validators on the builder.
-func (frc *FXRateCreate) check() error {
-	if _, ok := frc.mutation.TenantID(); !ok {
+func (_c *FXRateCreate) check() error {
+	if _, ok := _c.mutation.TenantID(); !ok {
 		return &ValidationError{Name: "tenant_id", err: errors.New(`ent: missing required field "FXRate.tenant_id"`)}
 	}
-	if v, ok := frc.mutation.TenantID(); ok {
+	if v, ok := _c.mutation.TenantID(); ok {
 		if err := fxrate.TenantIDValidator(v); err != nil {
 			return &ValidationError{Name: "tenant_id", err: fmt.Errorf(`ent: validator failed for field "FXRate.tenant_id": %w`, err)}
 		}
 	}
-	if _, ok := frc.mutation.Status(); !ok {
+	if _, ok := _c.mutation.Status(); !ok {
 		return &ValidationError{Name: "status", err: errors.New(`ent: missing required field "FXRate.status"`)}
 	}
-	if _, ok := frc.mutation.CreatedAt(); !ok {
+	if _, ok := _c.mutation.CreatedAt(); !ok {
 		return &ValidationError{Name: "created_at", err: errors.New(`ent: missing required field "FXRate.created_at"`)}
 	}
-	if _, ok := frc.mutation.UpdatedAt(); !ok {
+	if _, ok := _c.mutation.UpdatedAt(); !ok {
 		return &ValidationError{Name: "updated_at", err: errors.New(`ent: missing required field "FXRate.updated_at"`)}
 	}
-	if _, ok := frc.mutation.Scope(); !ok {
+	if _, ok := _c.mutation.Scope(); !ok {
 		return &ValidationError{Name: "scope", err: errors.New(`ent: missing required field "FXRate.scope"`)}
 	}
-	if v, ok := frc.mutation.Scope(); ok {
+	if v, ok := _c.mutation.Scope(); ok {
 		if err := fxrate.ScopeValidator(v); err != nil {
 			return &ValidationError{Name: "scope", err: fmt.Errorf(`ent: validator failed for field "FXRate.scope": %w`, err)}
 		}
 	}
-	if _, ok := frc.mutation.ScopeID(); !ok {
+	if _, ok := _c.mutation.ScopeID(); !ok {
 		return &ValidationError{Name: "scope_id", err: errors.New(`ent: missing required field "FXRate.scope_id"`)}
 	}
-	if v, ok := frc.mutation.ScopeID(); ok {
+	if v, ok := _c.mutation.ScopeID(); ok {
 		if err := fxrate.ScopeIDValidator(v); err != nil {
 			return &ValidationError{Name: "scope_id", err: fmt.Errorf(`ent: validator failed for field "FXRate.scope_id": %w`, err)}
 		}
 	}
-	if _, ok := frc.mutation.FromCurrency(); !ok {
+	if _, ok := _c.mutation.FromCurrency(); !ok {
 		return &ValidationError{Name: "from_currency", err: errors.New(`ent: missing required field "FXRate.from_currency"`)}
 	}
-	if v, ok := frc.mutation.FromCurrency(); ok {
+	if v, ok := _c.mutation.FromCurrency(); ok {
 		if err := fxrate.FromCurrencyValidator(v); err != nil {
 			return &ValidationError{Name: "from_currency", err: fmt.Errorf(`ent: validator failed for field "FXRate.from_currency": %w`, err)}
 		}
 	}
-	if _, ok := frc.mutation.ToCurrency(); !ok {
+	if _, ok := _c.mutation.ToCurrency(); !ok {
 		return &ValidationError{Name: "to_currency", err: errors.New(`ent: missing required field "FXRate.to_currency"`)}
 	}
-	if v, ok := frc.mutation.ToCurrency(); ok {
+	if v, ok := _c.mutation.ToCurrency(); ok {
 		if err := fxrate.ToCurrencyValidator(v); err != nil {
 			return &ValidationError{Name: "to_currency", err: fmt.Errorf(`ent: validator failed for field "FXRate.to_currency": %w`, err)}
 		}
 	}
-	if _, ok := frc.mutation.Rate(); !ok {
+	if _, ok := _c.mutation.Rate(); !ok {
 		return &ValidationError{Name: "rate", err: errors.New(`ent: missing required field "FXRate.rate"`)}
 	}
 	return nil
 }
 
-func (frc *FXRateCreate) sqlSave(ctx context.Context) (*FXRate, error) {
-	if err := frc.check(); err != nil {
+func (_c *FXRateCreate) sqlSave(ctx context.Context) (*FXRate, error) {
+	if err := _c.check(); err != nil {
 		return nil, err
 	}
-	_node, _spec := frc.createSpec()
-	if err := sqlgraph.CreateNode(ctx, frc.driver, _spec); err != nil {
+	_node, _spec := _c.createSpec()
+	if err := sqlgraph.CreateNode(ctx, _c.driver, _spec); err != nil {
 		if sqlgraph.IsConstraintError(err) {
 			err = &ConstraintError{msg: err.Error(), wrap: err}
 		}
@@ -309,77 +309,77 @@ func (frc *FXRateCreate) sqlSave(ctx context.Context) (*FXRate, error) {
 			return nil, fmt.Errorf("unexpected FXRate.ID type: %T", _spec.ID.Value)
 		}
 	}
-	frc.mutation.id = &_node.ID
-	frc.mutation.done = true
+	_c.mutation.id = &_node.ID
+	_c.mutation.done = true
 	return _node, nil
 }
 
-func (frc *FXRateCreate) createSpec() (*FXRate, *sqlgraph.CreateSpec) {
+func (_c *FXRateCreate) createSpec() (*FXRate, *sqlgraph.CreateSpec) {
 	var (
-		_node = &FXRate{config: frc.config}
+		_node = &FXRate{config: _c.config}
 		_spec = sqlgraph.NewCreateSpec(fxrate.Table, sqlgraph.NewFieldSpec(fxrate.FieldID, field.TypeString))
 	)
-	if id, ok := frc.mutation.ID(); ok {
+	if id, ok := _c.mutation.ID(); ok {
 		_node.ID = id
 		_spec.ID.Value = id
 	}
-	if value, ok := frc.mutation.TenantID(); ok {
+	if value, ok := _c.mutation.TenantID(); ok {
 		_spec.SetField(fxrate.FieldTenantID, field.TypeString, value)
 		_node.TenantID = value
 	}
-	if value, ok := frc.mutation.Status(); ok {
+	if value, ok := _c.mutation.Status(); ok {
 		_spec.SetField(fxrate.FieldStatus, field.TypeString, value)
 		_node.Status = value
 	}
-	if value, ok := frc.mutation.CreatedAt(); ok {
+	if value, ok := _c.mutation.CreatedAt(); ok {
 		_spec.SetField(fxrate.FieldCreatedAt, field.TypeTime, value)
 		_node.CreatedAt = value
 	}
-	if value, ok := frc.mutation.UpdatedAt(); ok {
+	if value, ok := _c.mutation.UpdatedAt(); ok {
 		_spec.SetField(fxrate.FieldUpdatedAt, field.TypeTime, value)
 		_node.UpdatedAt = value
 	}
-	if value, ok := frc.mutation.CreatedBy(); ok {
+	if value, ok := _c.mutation.CreatedBy(); ok {
 		_spec.SetField(fxrate.FieldCreatedBy, field.TypeString, value)
 		_node.CreatedBy = value
 	}
-	if value, ok := frc.mutation.UpdatedBy(); ok {
+	if value, ok := _c.mutation.UpdatedBy(); ok {
 		_spec.SetField(fxrate.FieldUpdatedBy, field.TypeString, value)
 		_node.UpdatedBy = value
 	}
-	if value, ok := frc.mutation.EnvironmentID(); ok {
+	if value, ok := _c.mutation.EnvironmentID(); ok {
 		_spec.SetField(fxrate.FieldEnvironmentID, field.TypeString, value)
 		_node.EnvironmentID = value
 	}
-	if value, ok := frc.mutation.Scope(); ok {
+	if value, ok := _c.mutation.Scope(); ok {
 		_spec.SetField(fxrate.FieldScope, field.TypeString, value)
 		_node.Scope = value
 	}
-	if value, ok := frc.mutation.ScopeID(); ok {
+	if value, ok := _c.mutation.ScopeID(); ok {
 		_spec.SetField(fxrate.FieldScopeID, field.TypeString, value)
 		_node.ScopeID = value
 	}
-	if value, ok := frc.mutation.FromCurrency(); ok {
+	if value, ok := _c.mutation.FromCurrency(); ok {
 		_spec.SetField(fxrate.FieldFromCurrency, field.TypeString, value)
 		_node.FromCurrency = value
 	}
-	if value, ok := frc.mutation.ToCurrency(); ok {
+	if value, ok := _c.mutation.ToCurrency(); ok {
 		_spec.SetField(fxrate.FieldToCurrency, field.TypeString, value)
 		_node.ToCurrency = value
 	}
-	if value, ok := frc.mutation.Rate(); ok {
+	if value, ok := _c.mutation.Rate(); ok {
 		_spec.SetField(fxrate.FieldRate, field.TypeOther, value)
 		_node.Rate = value
 	}
-	if value, ok := frc.mutation.ValidFrom(); ok {
+	if value, ok := _c.mutation.ValidFrom(); ok {
 		_spec.SetField(fxrate.FieldValidFrom, field.TypeTime, value)
 		_node.ValidFrom = &value
 	}
-	if value, ok := frc.mutation.ValidTo(); ok {
+	if value, ok := _c.mutation.ValidTo(); ok {
 		_spec.SetField(fxrate.FieldValidTo, field.TypeTime, value)
 		_node.ValidTo = &value
 	}
-	if value, ok := frc.mutation.Metadata(); ok {
+	if value, ok := _c.mutation.Metadata(); ok {
 		_spec.SetField(fxrate.FieldMetadata, field.TypeJSON, value)
 		_node.Metadata = value
 	}
@@ -394,16 +394,16 @@ type FXRateCreateBulk struct {
 }
 
 // Save creates the FXRate entities in the database.
-func (frcb *FXRateCreateBulk) Save(ctx context.Context) ([]*FXRate, error) {
-	if frcb.err != nil {
-		return nil, frcb.err
+func (_c *FXRateCreateBulk) Save(ctx context.Context) ([]*FXRate, error) {
+	if _c.err != nil {
+		return nil, _c.err
 	}
-	specs := make([]*sqlgraph.CreateSpec, len(frcb.builders))
-	nodes := make([]*FXRate, len(frcb.builders))
-	mutators := make([]Mutator, len(frcb.builders))
-	for i := range frcb.builders {
+	specs := make([]*sqlgraph.CreateSpec, len(_c.builders))
+	nodes := make([]*FXRate, len(_c.builders))
+	mutators := make([]Mutator, len(_c.builders))
+	for i := range _c.builders {
 		func(i int, root context.Context) {
-			builder := frcb.builders[i]
+			builder := _c.builders[i]
 			builder.defaults()
 			var mut Mutator = MutateFunc(func(ctx context.Context, m Mutation) (Value, error) {
 				mutation, ok := m.(*FXRateMutation)
@@ -417,11 +417,11 @@ func (frcb *FXRateCreateBulk) Save(ctx context.Context) ([]*FXRate, error) {
 				var err error
 				nodes[i], specs[i] = builder.createSpec()
 				if i < len(mutators)-1 {
-					_, err = mutators[i+1].Mutate(root, frcb.builders[i+1].mutation)
+					_, err = mutators[i+1].Mutate(root, _c.builders[i+1].mutation)
 				} else {
 					spec := &sqlgraph.BatchCreateSpec{Nodes: specs}
 					// Invoke the actual operation on the latest mutation in the chain.
-					if err = sqlgraph.BatchCreate(ctx, frcb.driver, spec); err != nil {
+					if err = sqlgraph.BatchCreate(ctx, _c.driver, spec); err != nil {
 						if sqlgraph.IsConstraintError(err) {
 							err = &ConstraintError{msg: err.Error(), wrap: err}
 						}
@@ -441,7 +441,7 @@ func (frcb *FXRateCreateBulk) Save(ctx context.Context) ([]*FXRate, error) {
 		}(i, ctx)
 	}
 	if len(mutators) > 0 {
-		if _, err := mutators[0].Mutate(ctx, frcb.builders[0].mutation); err != nil {
+		if _, err := mutators[0].Mutate(ctx, _c.builders[0].mutation); err != nil {
 			return nil, err
 		}
 	}
@@ -449,8 +449,8 @@ func (frcb *FXRateCreateBulk) Save(ctx context.Context) ([]*FXRate, error) {
 }
 
 // SaveX is like Save, but panics if an error occurs.
-func (frcb *FXRateCreateBulk) SaveX(ctx context.Context) []*FXRate {
-	v, err := frcb.Save(ctx)
+func (_c *FXRateCreateBulk) SaveX(ctx context.Context) []*FXRate {
+	v, err := _c.Save(ctx)
 	if err != nil {
 		panic(err)
 	}
@@ -458,14 +458,14 @@ func (frcb *FXRateCreateBulk) SaveX(ctx context.Context) []*FXRate {
 }
 
 // Exec executes the query.
-func (frcb *FXRateCreateBulk) Exec(ctx context.Context) error {
-	_, err := frcb.Save(ctx)
+func (_c *FXRateCreateBulk) Exec(ctx context.Context) error {
+	_, err := _c.Save(ctx)
 	return err
 }
 
 // ExecX is like Exec, but panics if an error occurs.
-func (frcb *FXRateCreateBulk) ExecX(ctx context.Context) {
-	if err := frcb.Exec(ctx); err != nil {
+func (_c *FXRateCreateBulk) ExecX(ctx context.Context) {
+	if err := _c.Exec(ctx); err != nil {
 		panic(err)
 	}
 }

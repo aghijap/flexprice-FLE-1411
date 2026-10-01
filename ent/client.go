@@ -3946,8 +3946,8 @@ func (c *FXRateClient) Update() *FXRateUpdate {
 }
 
 // UpdateOne returns an update builder for the given entity.
-func (c *FXRateClient) UpdateOne(fr *FXRate) *FXRateUpdateOne {
-	mutation := newFXRateMutation(c.config, OpUpdateOne, withFXRate(fr))
+func (c *FXRateClient) UpdateOne(_m *FXRate) *FXRateUpdateOne {
+	mutation := newFXRateMutation(c.config, OpUpdateOne, withFXRate(_m))
 	return &FXRateUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
 }
 
@@ -3964,8 +3964,8 @@ func (c *FXRateClient) Delete() *FXRateDelete {
 }
 
 // DeleteOne returns a builder for deleting the given entity.
-func (c *FXRateClient) DeleteOne(fr *FXRate) *FXRateDeleteOne {
-	return c.DeleteOneID(fr.ID)
+func (c *FXRateClient) DeleteOne(_m *FXRate) *FXRateDeleteOne {
+	return c.DeleteOneID(_m.ID)
 }
 
 // DeleteOneID returns a builder for deleting the given entity by its id.

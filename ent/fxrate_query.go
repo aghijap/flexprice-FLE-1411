@@ -28,40 +28,40 @@ type FXRateQuery struct {
 }
 
 // Where adds a new predicate for the FXRateQuery builder.
-func (frq *FXRateQuery) Where(ps ...predicate.FXRate) *FXRateQuery {
-	frq.predicates = append(frq.predicates, ps...)
-	return frq
+func (_q *FXRateQuery) Where(ps ...predicate.FXRate) *FXRateQuery {
+	_q.predicates = append(_q.predicates, ps...)
+	return _q
 }
 
 // Limit the number of records to be returned by this query.
-func (frq *FXRateQuery) Limit(limit int) *FXRateQuery {
-	frq.ctx.Limit = &limit
-	return frq
+func (_q *FXRateQuery) Limit(limit int) *FXRateQuery {
+	_q.ctx.Limit = &limit
+	return _q
 }
 
 // Offset to start from.
-func (frq *FXRateQuery) Offset(offset int) *FXRateQuery {
-	frq.ctx.Offset = &offset
-	return frq
+func (_q *FXRateQuery) Offset(offset int) *FXRateQuery {
+	_q.ctx.Offset = &offset
+	return _q
 }
 
 // Unique configures the query builder to filter duplicate records on query.
 // By default, unique is set to true, and can be disabled using this method.
-func (frq *FXRateQuery) Unique(unique bool) *FXRateQuery {
-	frq.ctx.Unique = &unique
-	return frq
+func (_q *FXRateQuery) Unique(unique bool) *FXRateQuery {
+	_q.ctx.Unique = &unique
+	return _q
 }
 
 // Order specifies how the records should be ordered.
-func (frq *FXRateQuery) Order(o ...fxrate.OrderOption) *FXRateQuery {
-	frq.order = append(frq.order, o...)
-	return frq
+func (_q *FXRateQuery) Order(o ...fxrate.OrderOption) *FXRateQuery {
+	_q.order = append(_q.order, o...)
+	return _q
 }
 
 // First returns the first FXRate entity from the query.
 // Returns a *NotFoundError when no FXRate was found.
-func (frq *FXRateQuery) First(ctx context.Context) (*FXRate, error) {
-	nodes, err := frq.Limit(1).All(setContextOp(ctx, frq.ctx, ent.OpQueryFirst))
+func (_q *FXRateQuery) First(ctx context.Context) (*FXRate, error) {
+	nodes, err := _q.Limit(1).All(setContextOp(ctx, _q.ctx, ent.OpQueryFirst))
 	if err != nil {
 		return nil, err
 	}
@@ -72,8 +72,8 @@ func (frq *FXRateQuery) First(ctx context.Context) (*FXRate, error) {
 }
 
 // FirstX is like First, but panics if an error occurs.
-func (frq *FXRateQuery) FirstX(ctx context.Context) *FXRate {
-	node, err := frq.First(ctx)
+func (_q *FXRateQuery) FirstX(ctx context.Context) *FXRate {
+	node, err := _q.First(ctx)
 	if err != nil && !IsNotFound(err) {
 		panic(err)
 	}
@@ -82,9 +82,9 @@ func (frq *FXRateQuery) FirstX(ctx context.Context) *FXRate {
 
 // FirstID returns the first FXRate ID from the query.
 // Returns a *NotFoundError when no FXRate ID was found.
-func (frq *FXRateQuery) FirstID(ctx context.Context) (id string, err error) {
+func (_q *FXRateQuery) FirstID(ctx context.Context) (id string, err error) {
 	var ids []string
-	if ids, err = frq.Limit(1).IDs(setContextOp(ctx, frq.ctx, ent.OpQueryFirstID)); err != nil {
+	if ids, err = _q.Limit(1).IDs(setContextOp(ctx, _q.ctx, ent.OpQueryFirstID)); err != nil {
 		return
 	}
 	if len(ids) == 0 {
@@ -95,8 +95,8 @@ func (frq *FXRateQuery) FirstID(ctx context.Context) (id string, err error) {
 }
 
 // FirstIDX is like FirstID, but panics if an error occurs.
-func (frq *FXRateQuery) FirstIDX(ctx context.Context) string {
-	id, err := frq.FirstID(ctx)
+func (_q *FXRateQuery) FirstIDX(ctx context.Context) string {
+	id, err := _q.FirstID(ctx)
 	if err != nil && !IsNotFound(err) {
 		panic(err)
 	}
@@ -106,8 +106,8 @@ func (frq *FXRateQuery) FirstIDX(ctx context.Context) string {
 // Only returns a single FXRate entity found by the query, ensuring it only returns one.
 // Returns a *NotSingularError when more than one FXRate entity is found.
 // Returns a *NotFoundError when no FXRate entities are found.
-func (frq *FXRateQuery) Only(ctx context.Context) (*FXRate, error) {
-	nodes, err := frq.Limit(2).All(setContextOp(ctx, frq.ctx, ent.OpQueryOnly))
+func (_q *FXRateQuery) Only(ctx context.Context) (*FXRate, error) {
+	nodes, err := _q.Limit(2).All(setContextOp(ctx, _q.ctx, ent.OpQueryOnly))
 	if err != nil {
 		return nil, err
 	}
@@ -122,8 +122,8 @@ func (frq *FXRateQuery) Only(ctx context.Context) (*FXRate, error) {
 }
 
 // OnlyX is like Only, but panics if an error occurs.
-func (frq *FXRateQuery) OnlyX(ctx context.Context) *FXRate {
-	node, err := frq.Only(ctx)
+func (_q *FXRateQuery) OnlyX(ctx context.Context) *FXRate {
+	node, err := _q.Only(ctx)
 	if err != nil {
 		panic(err)
 	}
@@ -133,9 +133,9 @@ func (frq *FXRateQuery) OnlyX(ctx context.Context) *FXRate {
 // OnlyID is like Only, but returns the only FXRate ID in the query.
 // Returns a *NotSingularError when more than one FXRate ID is found.
 // Returns a *NotFoundError when no entities are found.
-func (frq *FXRateQuery) OnlyID(ctx context.Context) (id string, err error) {
+func (_q *FXRateQuery) OnlyID(ctx context.Context) (id string, err error) {
 	var ids []string
-	if ids, err = frq.Limit(2).IDs(setContextOp(ctx, frq.ctx, ent.OpQueryOnlyID)); err != nil {
+	if ids, err = _q.Limit(2).IDs(setContextOp(ctx, _q.ctx, ent.OpQueryOnlyID)); err != nil {
 		return
 	}
 	switch len(ids) {
@@ -150,8 +150,8 @@ func (frq *FXRateQuery) OnlyID(ctx context.Context) (id string, err error) {
 }
 
 // OnlyIDX is like OnlyID, but panics if an error occurs.
-func (frq *FXRateQuery) OnlyIDX(ctx context.Context) string {
-	id, err := frq.OnlyID(ctx)
+func (_q *FXRateQuery) OnlyIDX(ctx context.Context) string {
+	id, err := _q.OnlyID(ctx)
 	if err != nil {
 		panic(err)
 	}
@@ -159,18 +159,18 @@ func (frq *FXRateQuery) OnlyIDX(ctx context.Context) string {
 }
 
 // All executes the query and returns a list of FXRates.
-func (frq *FXRateQuery) All(ctx context.Context) ([]*FXRate, error) {
-	ctx = setContextOp(ctx, frq.ctx, ent.OpQueryAll)
-	if err := frq.prepareQuery(ctx); err != nil {
+func (_q *FXRateQuery) All(ctx context.Context) ([]*FXRate, error) {
+	ctx = setContextOp(ctx, _q.ctx, ent.OpQueryAll)
+	if err := _q.prepareQuery(ctx); err != nil {
 		return nil, err
 	}
 	qr := querierAll[[]*FXRate, *FXRateQuery]()
-	return withInterceptors[[]*FXRate](ctx, frq, qr, frq.inters)
+	return withInterceptors[[]*FXRate](ctx, _q, qr, _q.inters)
 }
 
 // AllX is like All, but panics if an error occurs.
-func (frq *FXRateQuery) AllX(ctx context.Context) []*FXRate {
-	nodes, err := frq.All(ctx)
+func (_q *FXRateQuery) AllX(ctx context.Context) []*FXRate {
+	nodes, err := _q.All(ctx)
 	if err != nil {
 		panic(err)
 	}
@@ -178,20 +178,20 @@ func (frq *FXRateQuery) AllX(ctx context.Context) []*FXRate {
 }
 
 // IDs executes the query and returns a list of FXRate IDs.
-func (frq *FXRateQuery) IDs(ctx context.Context) (ids []string, err error) {
-	if frq.ctx.Unique == nil && frq.path != nil {
-		frq.Unique(true)
+func (_q *FXRateQuery) IDs(ctx context.Context) (ids []string, err error) {
+	if _q.ctx.Unique == nil && _q.path != nil {
+		_q.Unique(true)
 	}
-	ctx = setContextOp(ctx, frq.ctx, ent.OpQueryIDs)
-	if err = frq.Select(fxrate.FieldID).Scan(ctx, &ids); err != nil {
+	ctx = setContextOp(ctx, _q.ctx, ent.OpQueryIDs)
+	if err = _q.Select(fxrate.FieldID).Scan(ctx, &ids); err != nil {
 		return nil, err
 	}
 	return ids, nil
 }
 
 // IDsX is like IDs, but panics if an error occurs.
-func (frq *FXRateQuery) IDsX(ctx context.Context) []string {
-	ids, err := frq.IDs(ctx)
+func (_q *FXRateQuery) IDsX(ctx context.Context) []string {
+	ids, err := _q.IDs(ctx)
 	if err != nil {
 		panic(err)
 	}
@@ -199,17 +199,17 @@ func (frq *FXRateQuery) IDsX(ctx context.Context) []string {
 }
 
 // Count returns the count of the given query.
-func (frq *FXRateQuery) Count(ctx context.Context) (int, error) {
-	ctx = setContextOp(ctx, frq.ctx, ent.OpQueryCount)
-	if err := frq.prepareQuery(ctx); err != nil {
+func (_q *FXRateQuery) Count(ctx context.Context) (int, error) {
+	ctx = setContextOp(ctx, _q.ctx, ent.OpQueryCount)
+	if err := _q.prepareQuery(ctx); err != nil {
 		return 0, err
 	}
-	return withInterceptors[int](ctx, frq, querierCount[*FXRateQuery](), frq.inters)
+	return withInterceptors[int](ctx, _q, querierCount[*FXRateQuery](), _q.inters)
 }
 
 // CountX is like Count, but panics if an error occurs.
-func (frq *FXRateQuery) CountX(ctx context.Context) int {
-	count, err := frq.Count(ctx)
+func (_q *FXRateQuery) CountX(ctx context.Context) int {
+	count, err := _q.Count(ctx)
 	if err != nil {
 		panic(err)
 	}
@@ -217,9 +217,9 @@ func (frq *FXRateQuery) CountX(ctx context.Context) int {
 }
 
 // Exist returns true if the query has elements in the graph.
-func (frq *FXRateQuery) Exist(ctx context.Context) (bool, error) {
-	ctx = setContextOp(ctx, frq.ctx, ent.OpQueryExist)
-	switch _, err := frq.FirstID(ctx); {
+func (_q *FXRateQuery) Exist(ctx context.Context) (bool, error) {
+	ctx = setContextOp(ctx, _q.ctx, ent.OpQueryExist)
+	switch _, err := _q.FirstID(ctx); {
 	case IsNotFound(err):
 		return false, nil
 	case err != nil:
@@ -230,8 +230,8 @@ func (frq *FXRateQuery) Exist(ctx context.Context) (bool, error) {
 }
 
 // ExistX is like Exist, but panics if an error occurs.
-func (frq *FXRateQuery) ExistX(ctx context.Context) bool {
-	exist, err := frq.Exist(ctx)
+func (_q *FXRateQuery) ExistX(ctx context.Context) bool {
+	exist, err := _q.Exist(ctx)
 	if err != nil {
 		panic(err)
 	}
@@ -240,19 +240,19 @@ func (frq *FXRateQuery) ExistX(ctx context.Context) bool {
 
 // Clone returns a duplicate of the FXRateQuery builder, including all associated steps. It can be
 // used to prepare common query builders and use them differently after the clone is made.
-func (frq *FXRateQuery) Clone() *FXRateQuery {
-	if frq == nil {
+func (_q *FXRateQuery) Clone() *FXRateQuery {
+	if _q == nil {
 		return nil
 	}
 	return &FXRateQuery{
-		config:     frq.config,
-		ctx:        frq.ctx.Clone(),
-		order:      append([]fxrate.OrderOption{}, frq.order...),
-		inters:     append([]Interceptor{}, frq.inters...),
-		predicates: append([]predicate.FXRate{}, frq.predicates...),
+		config:     _q.config,
+		ctx:        _q.ctx.Clone(),
+		order:      append([]fxrate.OrderOption{}, _q.order...),
+		inters:     append([]Interceptor{}, _q.inters...),
+		predicates: append([]predicate.FXRate{}, _q.predicates...),
 		// clone intermediate query.
-		sql:  frq.sql.Clone(),
-		path: frq.path,
+		sql:  _q.sql.Clone(),
+		path: _q.path,
 	}
 }
 
@@ -270,10 +270,10 @@ func (frq *FXRateQuery) Clone() *FXRateQuery {
 //		GroupBy(fxrate.FieldTenantID).
 //		Aggregate(ent.Count()).
 //		Scan(ctx, &v)
-func (frq *FXRateQuery) GroupBy(field string, fields ...string) *FXRateGroupBy {
-	frq.ctx.Fields = append([]string{field}, fields...)
-	grbuild := &FXRateGroupBy{build: frq}
-	grbuild.flds = &frq.ctx.Fields
+func (_q *FXRateQuery) GroupBy(field string, fields ...string) *FXRateGroupBy {
+	_q.ctx.Fields = append([]string{field}, fields...)
+	grbuild := &FXRateGroupBy{build: _q}
+	grbuild.flds = &_q.ctx.Fields
 	grbuild.label = fxrate.Label
 	grbuild.scan = grbuild.Scan
 	return grbuild
@@ -291,62 +291,62 @@ func (frq *FXRateQuery) GroupBy(field string, fields ...string) *FXRateGroupBy {
 //	client.FXRate.Query().
 //		Select(fxrate.FieldTenantID).
 //		Scan(ctx, &v)
-func (frq *FXRateQuery) Select(fields ...string) *FXRateSelect {
-	frq.ctx.Fields = append(frq.ctx.Fields, fields...)
-	sbuild := &FXRateSelect{FXRateQuery: frq}
+func (_q *FXRateQuery) Select(fields ...string) *FXRateSelect {
+	_q.ctx.Fields = append(_q.ctx.Fields, fields...)
+	sbuild := &FXRateSelect{FXRateQuery: _q}
 	sbuild.label = fxrate.Label
-	sbuild.flds, sbuild.scan = &frq.ctx.Fields, sbuild.Scan
+	sbuild.flds, sbuild.scan = &_q.ctx.Fields, sbuild.Scan
 	return sbuild
 }
 
 // Aggregate returns a FXRateSelect configured with the given aggregations.
-func (frq *FXRateQuery) Aggregate(fns ...AggregateFunc) *FXRateSelect {
-	return frq.Select().Aggregate(fns...)
+func (_q *FXRateQuery) Aggregate(fns ...AggregateFunc) *FXRateSelect {
+	return _q.Select().Aggregate(fns...)
 }
 
-func (frq *FXRateQuery) prepareQuery(ctx context.Context) error {
-	for _, inter := range frq.inters {
+func (_q *FXRateQuery) prepareQuery(ctx context.Context) error {
+	for _, inter := range _q.inters {
 		if inter == nil {
 			return fmt.Errorf("ent: uninitialized interceptor (forgotten import ent/runtime?)")
 		}
 		if trv, ok := inter.(Traverser); ok {
-			if err := trv.Traverse(ctx, frq); err != nil {
+			if err := trv.Traverse(ctx, _q); err != nil {
 				return err
 			}
 		}
 	}
-	for _, f := range frq.ctx.Fields {
+	for _, f := range _q.ctx.Fields {
 		if !fxrate.ValidColumn(f) {
 			return &ValidationError{Name: f, err: fmt.Errorf("ent: invalid field %q for query", f)}
 		}
 	}
-	if frq.path != nil {
-		prev, err := frq.path(ctx)
+	if _q.path != nil {
+		prev, err := _q.path(ctx)
 		if err != nil {
 			return err
 		}
-		frq.sql = prev
+		_q.sql = prev
 	}
 	return nil
 }
 
-func (frq *FXRateQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*FXRate, error) {
+func (_q *FXRateQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*FXRate, error) {
 	var (
 		nodes = []*FXRate{}
-		_spec = frq.querySpec()
+		_spec = _q.querySpec()
 	)
 	_spec.ScanValues = func(columns []string) ([]any, error) {
 		return (*FXRate).scanValues(nil, columns)
 	}
 	_spec.Assign = func(columns []string, values []any) error {
-		node := &FXRate{config: frq.config}
+		node := &FXRate{config: _q.config}
 		nodes = append(nodes, node)
 		return node.assignValues(columns, values)
 	}
 	for i := range hooks {
 		hooks[i](ctx, _spec)
 	}
-	if err := sqlgraph.QueryNodes(ctx, frq.driver, _spec); err != nil {
+	if err := sqlgraph.QueryNodes(ctx, _q.driver, _spec); err != nil {
 		return nil, err
 	}
 	if len(nodes) == 0 {
@@ -355,24 +355,24 @@ func (frq *FXRateQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*FXRa
 	return nodes, nil
 }
 
-func (frq *FXRateQuery) sqlCount(ctx context.Context) (int, error) {
-	_spec := frq.querySpec()
-	_spec.Node.Columns = frq.ctx.Fields
-	if len(frq.ctx.Fields) > 0 {
-		_spec.Unique = frq.ctx.Unique != nil && *frq.ctx.Unique
+func (_q *FXRateQuery) sqlCount(ctx context.Context) (int, error) {
+	_spec := _q.querySpec()
+	_spec.Node.Columns = _q.ctx.Fields
+	if len(_q.ctx.Fields) > 0 {
+		_spec.Unique = _q.ctx.Unique != nil && *_q.ctx.Unique
 	}
-	return sqlgraph.CountNodes(ctx, frq.driver, _spec)
+	return sqlgraph.CountNodes(ctx, _q.driver, _spec)
 }
 
-func (frq *FXRateQuery) querySpec() *sqlgraph.QuerySpec {
+func (_q *FXRateQuery) querySpec() *sqlgraph.QuerySpec {
 	_spec := sqlgraph.NewQuerySpec(fxrate.Table, fxrate.Columns, sqlgraph.NewFieldSpec(fxrate.FieldID, field.TypeString))
-	_spec.From = frq.sql
-	if unique := frq.ctx.Unique; unique != nil {
+	_spec.From = _q.sql
+	if unique := _q.ctx.Unique; unique != nil {
 		_spec.Unique = *unique
-	} else if frq.path != nil {
+	} else if _q.path != nil {
 		_spec.Unique = true
 	}
-	if fields := frq.ctx.Fields; len(fields) > 0 {
+	if fields := _q.ctx.Fields; len(fields) > 0 {
 		_spec.Node.Columns = make([]string, 0, len(fields))
 		_spec.Node.Columns = append(_spec.Node.Columns, fxrate.FieldID)
 		for i := range fields {
@@ -381,20 +381,20 @@ func (frq *FXRateQuery) querySpec() *sqlgraph.QuerySpec {
 			}
 		}
 	}
-	if ps := frq.predicates; len(ps) > 0 {
+	if ps := _q.predicates; len(ps) > 0 {
 		_spec.Predicate = func(selector *sql.Selector) {
 			for i := range ps {
 				ps[i](selector)
 			}
 		}
 	}
-	if limit := frq.ctx.Limit; limit != nil {
+	if limit := _q.ctx.Limit; limit != nil {
 		_spec.Limit = *limit
 	}
-	if offset := frq.ctx.Offset; offset != nil {
+	if offset := _q.ctx.Offset; offset != nil {
 		_spec.Offset = *offset
 	}
-	if ps := frq.order; len(ps) > 0 {
+	if ps := _q.order; len(ps) > 0 {
 		_spec.Order = func(selector *sql.Selector) {
 			for i := range ps {
 				ps[i](selector)
@@ -404,33 +404,33 @@ func (frq *FXRateQuery) querySpec() *sqlgraph.QuerySpec {
 	return _spec
 }
 
-func (frq *FXRateQuery) sqlQuery(ctx context.Context) *sql.Selector {
-	builder := sql.Dialect(frq.driver.Dialect())
+func (_q *FXRateQuery) sqlQuery(ctx context.Context) *sql.Selector {
+	builder := sql.Dialect(_q.driver.Dialect())
 	t1 := builder.Table(fxrate.Table)
-	columns := frq.ctx.Fields
+	columns := _q.ctx.Fields
 	if len(columns) == 0 {
 		columns = fxrate.Columns
 	}
 	selector := builder.Select(t1.Columns(columns...)...).From(t1)
-	if frq.sql != nil {
-		selector = frq.sql
+	if _q.sql != nil {
+		selector = _q.sql
 		selector.Select(selector.Columns(columns...)...)
 	}
-	if frq.ctx.Unique != nil && *frq.ctx.Unique {
+	if _q.ctx.Unique != nil && *_q.ctx.Unique {
 		selector.Distinct()
 	}
-	for _, p := range frq.predicates {
+	for _, p := range _q.predicates {
 		p(selector)
 	}
-	for _, p := range frq.order {
+	for _, p := range _q.order {
 		p(selector)
 	}
-	if offset := frq.ctx.Offset; offset != nil {
+	if offset := _q.ctx.Offset; offset != nil {
 		// limit is mandatory for offset clause. We start
 		// with default value, and override it below if needed.
 		selector.Offset(*offset).Limit(math.MaxInt32)
 	}
-	if limit := frq.ctx.Limit; limit != nil {
+	if limit := _q.ctx.Limit; limit != nil {
 		selector.Limit(*limit)
 	}
 	return selector
@@ -443,41 +443,41 @@ type FXRateGroupBy struct {
 }
 
 // Aggregate adds the given aggregation functions to the group-by query.
-func (frgb *FXRateGroupBy) Aggregate(fns ...AggregateFunc) *FXRateGroupBy {
-	frgb.fns = append(frgb.fns, fns...)
-	return frgb
+func (_g *FXRateGroupBy) Aggregate(fns ...AggregateFunc) *FXRateGroupBy {
+	_g.fns = append(_g.fns, fns...)
+	return _g
 }
 
 // Scan applies the selector query and scans the result into the given value.
-func (frgb *FXRateGroupBy) Scan(ctx context.Context, v any) error {
-	ctx = setContextOp(ctx, frgb.build.ctx, ent.OpQueryGroupBy)
-	if err := frgb.build.prepareQuery(ctx); err != nil {
+func (_g *FXRateGroupBy) Scan(ctx context.Context, v any) error {
+	ctx = setContextOp(ctx, _g.build.ctx, ent.OpQueryGroupBy)
+	if err := _g.build.prepareQuery(ctx); err != nil {
 		return err
 	}
-	return scanWithInterceptors[*FXRateQuery, *FXRateGroupBy](ctx, frgb.build, frgb, frgb.build.inters, v)
+	return scanWithInterceptors[*FXRateQuery, *FXRateGroupBy](ctx, _g.build, _g, _g.build.inters, v)
 }
 
-func (frgb *FXRateGroupBy) sqlScan(ctx context.Context, root *FXRateQuery, v any) error {
+func (_g *FXRateGroupBy) sqlScan(ctx context.Context, root *FXRateQuery, v any) error {
 	selector := root.sqlQuery(ctx).Select()
-	aggregation := make([]string, 0, len(frgb.fns))
-	for _, fn := range frgb.fns {
+	aggregation := make([]string, 0, len(_g.fns))
+	for _, fn := range _g.fns {
 		aggregation = append(aggregation, fn(selector))
 	}
 	if len(selector.SelectedColumns()) == 0 {
-		columns := make([]string, 0, len(*frgb.flds)+len(frgb.fns))
-		for _, f := range *frgb.flds {
+		columns := make([]string, 0, len(*_g.flds)+len(_g.fns))
+		for _, f := range *_g.flds {
 			columns = append(columns, selector.C(f))
 		}
 		columns = append(columns, aggregation...)
 		selector.Select(columns...)
 	}
-	selector.GroupBy(selector.Columns(*frgb.flds...)...)
+	selector.GroupBy(selector.Columns(*_g.flds...)...)
 	if err := selector.Err(); err != nil {
 		return err
 	}
 	rows := &sql.Rows{}
 	query, args := selector.Query()
-	if err := frgb.build.driver.Query(ctx, query, args, rows); err != nil {
+	if err := _g.build.driver.Query(ctx, query, args, rows); err != nil {
 		return err
 	}
 	defer rows.Close()
@@ -491,27 +491,27 @@ type FXRateSelect struct {
 }
 
 // Aggregate adds the given aggregation functions to the selector query.
-func (frs *FXRateSelect) Aggregate(fns ...AggregateFunc) *FXRateSelect {
-	frs.fns = append(frs.fns, fns...)
-	return frs
+func (_s *FXRateSelect) Aggregate(fns ...AggregateFunc) *FXRateSelect {
+	_s.fns = append(_s.fns, fns...)
+	return _s
 }
 
 // Scan applies the selector query and scans the result into the given value.
-func (frs *FXRateSelect) Scan(ctx context.Context, v any) error {
-	ctx = setContextOp(ctx, frs.ctx, ent.OpQuerySelect)
-	if err := frs.prepareQuery(ctx); err != nil {
+func (_s *FXRateSelect) Scan(ctx context.Context, v any) error {
+	ctx = setContextOp(ctx, _s.ctx, ent.OpQuerySelect)
+	if err := _s.prepareQuery(ctx); err != nil {
 		return err
 	}
-	return scanWithInterceptors[*FXRateQuery, *FXRateSelect](ctx, frs.FXRateQuery, frs, frs.inters, v)
+	return scanWithInterceptors[*FXRateQuery, *FXRateSelect](ctx, _s.FXRateQuery, _s, _s.inters, v)
 }
 
-func (frs *FXRateSelect) sqlScan(ctx context.Context, root *FXRateQuery, v any) error {
+func (_s *FXRateSelect) sqlScan(ctx context.Context, root *FXRateQuery, v any) error {
 	selector := root.sqlQuery(ctx)
-	aggregation := make([]string, 0, len(frs.fns))
-	for _, fn := range frs.fns {
+	aggregation := make([]string, 0, len(_s.fns))
+	for _, fn := range _s.fns {
 		aggregation = append(aggregation, fn(selector))
 	}
-	switch n := len(*frs.selector.flds); {
+	switch n := len(*_s.selector.flds); {
 	case n == 0 && len(aggregation) > 0:
 		selector.Select(aggregation...)
 	case n != 0 && len(aggregation) > 0:
@@ -519,7 +519,7 @@ func (frs *FXRateSelect) sqlScan(ctx context.Context, root *FXRateQuery, v any) 
 	}
 	rows := &sql.Rows{}
 	query, args := selector.Query()
-	if err := frs.driver.Query(ctx, query, args, rows); err != nil {
+	if err := _s.driver.Query(ctx, query, args, rows); err != nil {
 		return err
 	}
 	defer rows.Close()

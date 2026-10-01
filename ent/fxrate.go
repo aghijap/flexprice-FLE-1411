@@ -74,7 +74,7 @@ func (*FXRate) scanValues(columns []string) ([]any, error) {
 
 // assignValues assigns the values that were returned from sql.Rows (after scanning)
 // to the FXRate fields.
-func (fr *FXRate) assignValues(columns []string, values []any) error {
+func (_m *FXRate) assignValues(columns []string, values []any) error {
 	if m, n := len(values), len(columns); m < n {
 		return fmt.Errorf("mismatch number of scan values: %d != %d", m, n)
 	}
@@ -84,104 +84,104 @@ func (fr *FXRate) assignValues(columns []string, values []any) error {
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field id", values[i])
 			} else if value.Valid {
-				fr.ID = value.String
+				_m.ID = value.String
 			}
 		case fxrate.FieldTenantID:
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field tenant_id", values[i])
 			} else if value.Valid {
-				fr.TenantID = value.String
+				_m.TenantID = value.String
 			}
 		case fxrate.FieldStatus:
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field status", values[i])
 			} else if value.Valid {
-				fr.Status = value.String
+				_m.Status = value.String
 			}
 		case fxrate.FieldCreatedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
 				return fmt.Errorf("unexpected type %T for field created_at", values[i])
 			} else if value.Valid {
-				fr.CreatedAt = value.Time
+				_m.CreatedAt = value.Time
 			}
 		case fxrate.FieldUpdatedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
 				return fmt.Errorf("unexpected type %T for field updated_at", values[i])
 			} else if value.Valid {
-				fr.UpdatedAt = value.Time
+				_m.UpdatedAt = value.Time
 			}
 		case fxrate.FieldCreatedBy:
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field created_by", values[i])
 			} else if value.Valid {
-				fr.CreatedBy = value.String
+				_m.CreatedBy = value.String
 			}
 		case fxrate.FieldUpdatedBy:
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field updated_by", values[i])
 			} else if value.Valid {
-				fr.UpdatedBy = value.String
+				_m.UpdatedBy = value.String
 			}
 		case fxrate.FieldEnvironmentID:
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field environment_id", values[i])
 			} else if value.Valid {
-				fr.EnvironmentID = value.String
+				_m.EnvironmentID = value.String
 			}
 		case fxrate.FieldScope:
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field scope", values[i])
 			} else if value.Valid {
-				fr.Scope = value.String
+				_m.Scope = value.String
 			}
 		case fxrate.FieldScopeID:
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field scope_id", values[i])
 			} else if value.Valid {
-				fr.ScopeID = value.String
+				_m.ScopeID = value.String
 			}
 		case fxrate.FieldFromCurrency:
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field from_currency", values[i])
 			} else if value.Valid {
-				fr.FromCurrency = value.String
+				_m.FromCurrency = value.String
 			}
 		case fxrate.FieldToCurrency:
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field to_currency", values[i])
 			} else if value.Valid {
-				fr.ToCurrency = value.String
+				_m.ToCurrency = value.String
 			}
 		case fxrate.FieldRate:
 			if value, ok := values[i].(*decimal.Decimal); !ok {
 				return fmt.Errorf("unexpected type %T for field rate", values[i])
 			} else if value != nil {
-				fr.Rate = *value
+				_m.Rate = *value
 			}
 		case fxrate.FieldValidFrom:
 			if value, ok := values[i].(*sql.NullTime); !ok {
 				return fmt.Errorf("unexpected type %T for field valid_from", values[i])
 			} else if value.Valid {
-				fr.ValidFrom = new(time.Time)
-				*fr.ValidFrom = value.Time
+				_m.ValidFrom = new(time.Time)
+				*_m.ValidFrom = value.Time
 			}
 		case fxrate.FieldValidTo:
 			if value, ok := values[i].(*sql.NullTime); !ok {
 				return fmt.Errorf("unexpected type %T for field valid_to", values[i])
 			} else if value.Valid {
-				fr.ValidTo = new(time.Time)
-				*fr.ValidTo = value.Time
+				_m.ValidTo = new(time.Time)
+				*_m.ValidTo = value.Time
 			}
 		case fxrate.FieldMetadata:
 			if value, ok := values[i].(*[]byte); !ok {
 				return fmt.Errorf("unexpected type %T for field metadata", values[i])
 			} else if value != nil && len(*value) > 0 {
-				if err := json.Unmarshal(*value, &fr.Metadata); err != nil {
+				if err := json.Unmarshal(*value, &_m.Metadata); err != nil {
 					return fmt.Errorf("unmarshal field metadata: %w", err)
 				}
 			}
 		default:
-			fr.selectValues.Set(columns[i], values[i])
+			_m.selectValues.Set(columns[i], values[i])
 		}
 	}
 	return nil
@@ -189,81 +189,81 @@ func (fr *FXRate) assignValues(columns []string, values []any) error {
 
 // Value returns the ent.Value that was dynamically selected and assigned to the FXRate.
 // This includes values selected through modifiers, order, etc.
-func (fr *FXRate) Value(name string) (ent.Value, error) {
-	return fr.selectValues.Get(name)
+func (_m *FXRate) Value(name string) (ent.Value, error) {
+	return _m.selectValues.Get(name)
 }
 
 // Update returns a builder for updating this FXRate.
 // Note that you need to call FXRate.Unwrap() before calling this method if this FXRate
 // was returned from a transaction, and the transaction was committed or rolled back.
-func (fr *FXRate) Update() *FXRateUpdateOne {
-	return NewFXRateClient(fr.config).UpdateOne(fr)
+func (_m *FXRate) Update() *FXRateUpdateOne {
+	return NewFXRateClient(_m.config).UpdateOne(_m)
 }
 
 // Unwrap unwraps the FXRate entity that was returned from a transaction after it was closed,
 // so that all future queries will be executed through the driver which created the transaction.
-func (fr *FXRate) Unwrap() *FXRate {
-	_tx, ok := fr.config.driver.(*txDriver)
+func (_m *FXRate) Unwrap() *FXRate {
+	_tx, ok := _m.config.driver.(*txDriver)
 	if !ok {
 		panic("ent: FXRate is not a transactional entity")
 	}
-	fr.config.driver = _tx.drv
-	return fr
+	_m.config.driver = _tx.drv
+	return _m
 }
 
 // String implements the fmt.Stringer.
-func (fr *FXRate) String() string {
+func (_m *FXRate) String() string {
 	var builder strings.Builder
 	builder.WriteString("FXRate(")
-	builder.WriteString(fmt.Sprintf("id=%v, ", fr.ID))
+	builder.WriteString(fmt.Sprintf("id=%v, ", _m.ID))
 	builder.WriteString("tenant_id=")
-	builder.WriteString(fr.TenantID)
+	builder.WriteString(_m.TenantID)
 	builder.WriteString(", ")
 	builder.WriteString("status=")
-	builder.WriteString(fr.Status)
+	builder.WriteString(_m.Status)
 	builder.WriteString(", ")
 	builder.WriteString("created_at=")
-	builder.WriteString(fr.CreatedAt.Format(time.ANSIC))
+	builder.WriteString(_m.CreatedAt.Format(time.ANSIC))
 	builder.WriteString(", ")
 	builder.WriteString("updated_at=")
-	builder.WriteString(fr.UpdatedAt.Format(time.ANSIC))
+	builder.WriteString(_m.UpdatedAt.Format(time.ANSIC))
 	builder.WriteString(", ")
 	builder.WriteString("created_by=")
-	builder.WriteString(fr.CreatedBy)
+	builder.WriteString(_m.CreatedBy)
 	builder.WriteString(", ")
 	builder.WriteString("updated_by=")
-	builder.WriteString(fr.UpdatedBy)
+	builder.WriteString(_m.UpdatedBy)
 	builder.WriteString(", ")
 	builder.WriteString("environment_id=")
-	builder.WriteString(fr.EnvironmentID)
+	builder.WriteString(_m.EnvironmentID)
 	builder.WriteString(", ")
 	builder.WriteString("scope=")
-	builder.WriteString(fr.Scope)
+	builder.WriteString(_m.Scope)
 	builder.WriteString(", ")
 	builder.WriteString("scope_id=")
-	builder.WriteString(fr.ScopeID)
+	builder.WriteString(_m.ScopeID)
 	builder.WriteString(", ")
 	builder.WriteString("from_currency=")
-	builder.WriteString(fr.FromCurrency)
+	builder.WriteString(_m.FromCurrency)
 	builder.WriteString(", ")
 	builder.WriteString("to_currency=")
-	builder.WriteString(fr.ToCurrency)
+	builder.WriteString(_m.ToCurrency)
 	builder.WriteString(", ")
 	builder.WriteString("rate=")
-	builder.WriteString(fmt.Sprintf("%v", fr.Rate))
+	builder.WriteString(fmt.Sprintf("%v", _m.Rate))
 	builder.WriteString(", ")
-	if v := fr.ValidFrom; v != nil {
+	if v := _m.ValidFrom; v != nil {
 		builder.WriteString("valid_from=")
 		builder.WriteString(v.Format(time.ANSIC))
 	}
 	builder.WriteString(", ")
-	if v := fr.ValidTo; v != nil {
+	if v := _m.ValidTo; v != nil {
 		builder.WriteString("valid_to=")
 		builder.WriteString(v.Format(time.ANSIC))
 	}
 	builder.WriteString(", ")
 	builder.WriteString("metadata=")
-	builder.WriteString(fmt.Sprintf("%v", fr.Metadata))
+	builder.WriteString(fmt.Sprintf("%v", _m.Metadata))
 	builder.WriteByte(')')
 	return builder.String()
 }
