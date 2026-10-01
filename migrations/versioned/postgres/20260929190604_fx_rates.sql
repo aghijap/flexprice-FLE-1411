@@ -1,9 +1,9 @@
 -- migrate:up
 -- Adaptive multi-currency (FLE-1383): tenant-configured FX rates.
--- Columns carry IF NOT EXISTS; index creation uses CONCURRENTLY by hand.
-SET lock_timeout = '3s';
-SET statement_timeout = '30s';
-
+-- This is a brand-new table, so its indexes build instantly inside this ordinary
+-- transactional migration — CONCURRENTLY is unnecessary (it only matters for an index
+-- on an already-populated table) and would require a single-statement transaction:false
+-- file. Timeouts come from the connection (scripts/migrations/apply.sh), not the file.
 CREATE TABLE IF NOT EXISTS "fx_rates" (
   "id"             varchar(50)    NOT NULL,
   "tenant_id"      varchar(50)    NOT NULL,
@@ -24,11 +24,11 @@ CREATE TABLE IF NOT EXISTS "fx_rates" (
   PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "idx_fx_rate_tenant_live"
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_fx_rate_tenant_live"
   ON "fx_rates" ("tenant_id","environment_id","scope","scope_id","from_currency","to_currency")
   WHERE ((status)::text = 'published'::text) AND ((scope)::text = 'tenant'::text);
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "idx_fx_rate_override"
+CREATE INDEX IF NOT EXISTS "idx_fx_rate_override"
   ON "fx_rates" ("tenant_id","environment_id","scope","scope_id","from_currency","to_currency","valid_from");
 
 -- migrate:down
