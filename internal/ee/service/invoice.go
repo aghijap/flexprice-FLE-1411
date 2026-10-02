@@ -116,6 +116,10 @@ func (s *invoiceService) CreateOneOffInvoice(ctx context.Context, req dto.Create
 		}
 	}
 
+	if err := s.rejectPrepaidCrossCurrencyOneOff(ctx, req); err != nil {
+		return nil, err
+	}
+
 	// Validate coupons
 	couponValidationService := NewCouponValidationService(s.ServiceParams)
 	validCoupons := make([]dto.InvoiceCoupon, 0)
@@ -1170,6 +1174,16 @@ func (s *invoiceService) performFinalizeInvoiceActions(ctx context.Context, inv 
 				lockedInv.MirrorTaxIntoDenomination()
 
 			}
+		}
+
+		// ====================================================================
+		// Convert to the customer's billing currency and recompute tax on the
+		// converted amounts (§5.2 steps 4–6). Runs for any invoice type; a no-op
+		// when the customer has no billing currency or it matches the charge
+		// currency. A missing rate stops finalize and leaves the invoice DRAFT.
+		// ====================================================================
+		if err := s.convertAndRetaxAtFinalize(txCtx, lockedInv); err != nil {
+			return err
 		}
 
 		// ====================================================================

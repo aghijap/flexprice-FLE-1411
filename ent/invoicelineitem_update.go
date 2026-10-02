@@ -99,6 +99,20 @@ func (_u *InvoiceLineItemUpdate) SetNillableQuantity(v *decimal.Decimal) *Invoic
 	return _u
 }
 
+// SetCurrency sets the "currency" field.
+func (_u *InvoiceLineItemUpdate) SetCurrency(v string) *InvoiceLineItemUpdate {
+	_u.mutation.SetCurrency(v)
+	return _u
+}
+
+// SetNillableCurrency sets the "currency" field if the given value is not nil.
+func (_u *InvoiceLineItemUpdate) SetNillableCurrency(v *string) *InvoiceLineItemUpdate {
+	if v != nil {
+		_u.SetCurrency(*v)
+	}
+	return _u
+}
+
 // SetPeriodStart sets the "period_start" field.
 func (_u *InvoiceLineItemUpdate) SetPeriodStart(v time.Time) *InvoiceLineItemUpdate {
 	_u.mutation.SetPeriodStart(v)
@@ -255,6 +269,46 @@ func (_u *InvoiceLineItemUpdate) ClearCustomCurrency() *InvoiceLineItemUpdate {
 	return _u
 }
 
+// SetOriginalCurrency sets the "original_currency" field.
+func (_u *InvoiceLineItemUpdate) SetOriginalCurrency(v string) *InvoiceLineItemUpdate {
+	_u.mutation.SetOriginalCurrency(v)
+	return _u
+}
+
+// SetNillableOriginalCurrency sets the "original_currency" field if the given value is not nil.
+func (_u *InvoiceLineItemUpdate) SetNillableOriginalCurrency(v *string) *InvoiceLineItemUpdate {
+	if v != nil {
+		_u.SetOriginalCurrency(*v)
+	}
+	return _u
+}
+
+// ClearOriginalCurrency clears the value of the "original_currency" field.
+func (_u *InvoiceLineItemUpdate) ClearOriginalCurrency() *InvoiceLineItemUpdate {
+	_u.mutation.ClearOriginalCurrency()
+	return _u
+}
+
+// SetOriginalAmount sets the "original_amount" field.
+func (_u *InvoiceLineItemUpdate) SetOriginalAmount(v decimal.Decimal) *InvoiceLineItemUpdate {
+	_u.mutation.SetOriginalAmount(v)
+	return _u
+}
+
+// SetNillableOriginalAmount sets the "original_amount" field if the given value is not nil.
+func (_u *InvoiceLineItemUpdate) SetNillableOriginalAmount(v *decimal.Decimal) *InvoiceLineItemUpdate {
+	if v != nil {
+		_u.SetOriginalAmount(*v)
+	}
+	return _u
+}
+
+// ClearOriginalAmount clears the value of the "original_amount" field.
+func (_u *InvoiceLineItemUpdate) ClearOriginalAmount() *InvoiceLineItemUpdate {
+	_u.mutation.ClearOriginalAmount()
+	return _u
+}
+
 // AddCouponApplicationIDs adds the "coupon_applications" edge to the CouponApplication entity by IDs.
 func (_u *InvoiceLineItemUpdate) AddCouponApplicationIDs(ids ...string) *InvoiceLineItemUpdate {
 	_u.mutation.AddCouponApplicationIDs(ids...)
@@ -334,6 +388,11 @@ func (_u *InvoiceLineItemUpdate) defaults() {
 
 // check runs all checks and user-defined validators on the builder.
 func (_u *InvoiceLineItemUpdate) check() error {
+	if v, ok := _u.mutation.Currency(); ok {
+		if err := invoicelineitem.CurrencyValidator(v); err != nil {
+			return &ValidationError{Name: "currency", err: fmt.Errorf(`ent: validator failed for field "InvoiceLineItem.currency": %w`, err)}
+		}
+	}
 	if _u.mutation.InvoiceCleared() && len(_u.mutation.InvoiceIDs()) > 0 {
 		return errors.New(`ent: clearing a required unique edge "InvoiceLineItem.invoice"`)
 	}
@@ -412,6 +471,9 @@ func (_u *InvoiceLineItemUpdate) sqlSave(ctx context.Context) (_node int, err er
 	if value, ok := _u.mutation.Quantity(); ok {
 		_spec.SetField(invoicelineitem.FieldQuantity, field.TypeOther, value)
 	}
+	if value, ok := _u.mutation.Currency(); ok {
+		_spec.SetField(invoicelineitem.FieldCurrency, field.TypeString, value)
+	}
 	if value, ok := _u.mutation.PeriodStart(); ok {
 		_spec.SetField(invoicelineitem.FieldPeriodStart, field.TypeTime, value)
 	}
@@ -471,6 +533,18 @@ func (_u *InvoiceLineItemUpdate) sqlSave(ctx context.Context) (_node int, err er
 	}
 	if _u.mutation.CustomCurrencyCleared() {
 		_spec.ClearField(invoicelineitem.FieldCustomCurrency, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.OriginalCurrency(); ok {
+		_spec.SetField(invoicelineitem.FieldOriginalCurrency, field.TypeString, value)
+	}
+	if _u.mutation.OriginalCurrencyCleared() {
+		_spec.ClearField(invoicelineitem.FieldOriginalCurrency, field.TypeString)
+	}
+	if value, ok := _u.mutation.OriginalAmount(); ok {
+		_spec.SetField(invoicelineitem.FieldOriginalAmount, field.TypeOther, value)
+	}
+	if _u.mutation.OriginalAmountCleared() {
+		_spec.ClearField(invoicelineitem.FieldOriginalAmount, field.TypeOther)
 	}
 	if _u.mutation.CouponApplicationsCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -601,6 +675,20 @@ func (_u *InvoiceLineItemUpdateOne) SetQuantity(v decimal.Decimal) *InvoiceLineI
 func (_u *InvoiceLineItemUpdateOne) SetNillableQuantity(v *decimal.Decimal) *InvoiceLineItemUpdateOne {
 	if v != nil {
 		_u.SetQuantity(*v)
+	}
+	return _u
+}
+
+// SetCurrency sets the "currency" field.
+func (_u *InvoiceLineItemUpdateOne) SetCurrency(v string) *InvoiceLineItemUpdateOne {
+	_u.mutation.SetCurrency(v)
+	return _u
+}
+
+// SetNillableCurrency sets the "currency" field if the given value is not nil.
+func (_u *InvoiceLineItemUpdateOne) SetNillableCurrency(v *string) *InvoiceLineItemUpdateOne {
+	if v != nil {
+		_u.SetCurrency(*v)
 	}
 	return _u
 }
@@ -761,6 +849,46 @@ func (_u *InvoiceLineItemUpdateOne) ClearCustomCurrency() *InvoiceLineItemUpdate
 	return _u
 }
 
+// SetOriginalCurrency sets the "original_currency" field.
+func (_u *InvoiceLineItemUpdateOne) SetOriginalCurrency(v string) *InvoiceLineItemUpdateOne {
+	_u.mutation.SetOriginalCurrency(v)
+	return _u
+}
+
+// SetNillableOriginalCurrency sets the "original_currency" field if the given value is not nil.
+func (_u *InvoiceLineItemUpdateOne) SetNillableOriginalCurrency(v *string) *InvoiceLineItemUpdateOne {
+	if v != nil {
+		_u.SetOriginalCurrency(*v)
+	}
+	return _u
+}
+
+// ClearOriginalCurrency clears the value of the "original_currency" field.
+func (_u *InvoiceLineItemUpdateOne) ClearOriginalCurrency() *InvoiceLineItemUpdateOne {
+	_u.mutation.ClearOriginalCurrency()
+	return _u
+}
+
+// SetOriginalAmount sets the "original_amount" field.
+func (_u *InvoiceLineItemUpdateOne) SetOriginalAmount(v decimal.Decimal) *InvoiceLineItemUpdateOne {
+	_u.mutation.SetOriginalAmount(v)
+	return _u
+}
+
+// SetNillableOriginalAmount sets the "original_amount" field if the given value is not nil.
+func (_u *InvoiceLineItemUpdateOne) SetNillableOriginalAmount(v *decimal.Decimal) *InvoiceLineItemUpdateOne {
+	if v != nil {
+		_u.SetOriginalAmount(*v)
+	}
+	return _u
+}
+
+// ClearOriginalAmount clears the value of the "original_amount" field.
+func (_u *InvoiceLineItemUpdateOne) ClearOriginalAmount() *InvoiceLineItemUpdateOne {
+	_u.mutation.ClearOriginalAmount()
+	return _u
+}
+
 // AddCouponApplicationIDs adds the "coupon_applications" edge to the CouponApplication entity by IDs.
 func (_u *InvoiceLineItemUpdateOne) AddCouponApplicationIDs(ids ...string) *InvoiceLineItemUpdateOne {
 	_u.mutation.AddCouponApplicationIDs(ids...)
@@ -853,6 +981,11 @@ func (_u *InvoiceLineItemUpdateOne) defaults() {
 
 // check runs all checks and user-defined validators on the builder.
 func (_u *InvoiceLineItemUpdateOne) check() error {
+	if v, ok := _u.mutation.Currency(); ok {
+		if err := invoicelineitem.CurrencyValidator(v); err != nil {
+			return &ValidationError{Name: "currency", err: fmt.Errorf(`ent: validator failed for field "InvoiceLineItem.currency": %w`, err)}
+		}
+	}
 	if _u.mutation.InvoiceCleared() && len(_u.mutation.InvoiceIDs()) > 0 {
 		return errors.New(`ent: clearing a required unique edge "InvoiceLineItem.invoice"`)
 	}
@@ -948,6 +1081,9 @@ func (_u *InvoiceLineItemUpdateOne) sqlSave(ctx context.Context) (_node *Invoice
 	if value, ok := _u.mutation.Quantity(); ok {
 		_spec.SetField(invoicelineitem.FieldQuantity, field.TypeOther, value)
 	}
+	if value, ok := _u.mutation.Currency(); ok {
+		_spec.SetField(invoicelineitem.FieldCurrency, field.TypeString, value)
+	}
 	if value, ok := _u.mutation.PeriodStart(); ok {
 		_spec.SetField(invoicelineitem.FieldPeriodStart, field.TypeTime, value)
 	}
@@ -1007,6 +1143,18 @@ func (_u *InvoiceLineItemUpdateOne) sqlSave(ctx context.Context) (_node *Invoice
 	}
 	if _u.mutation.CustomCurrencyCleared() {
 		_spec.ClearField(invoicelineitem.FieldCustomCurrency, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.OriginalCurrency(); ok {
+		_spec.SetField(invoicelineitem.FieldOriginalCurrency, field.TypeString, value)
+	}
+	if _u.mutation.OriginalCurrencyCleared() {
+		_spec.ClearField(invoicelineitem.FieldOriginalCurrency, field.TypeString)
+	}
+	if value, ok := _u.mutation.OriginalAmount(); ok {
+		_spec.SetField(invoicelineitem.FieldOriginalAmount, field.TypeOther, value)
+	}
+	if _u.mutation.OriginalAmountCleared() {
+		_spec.ClearField(invoicelineitem.FieldOriginalAmount, field.TypeOther)
 	}
 	if _u.mutation.CouponApplicationsCleared() {
 		edge := &sqlgraph.EdgeSpec{

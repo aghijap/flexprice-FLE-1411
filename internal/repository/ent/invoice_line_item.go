@@ -78,6 +78,8 @@ func (r *invoiceLineItemRepository) Create(ctx context.Context, item *domaininvo
 		SetEnvironmentID(item.EnvironmentID).
 		SetCommitmentInfo(item.CommitmentInfo).
 		SetCustomCurrency(item.CustomCurrency).
+		SetNillableOriginalCurrency(item.OriginalCurrency).
+		SetNillableOriginalAmount(item.OriginalAmount).
 		SetNillableSubscriptionLineItemID(item.SubscriptionLineItemID).
 		SetNillableAdjustedEntitlementQuantity(item.AdjustedEntitlementQuantity).
 		SetNillableParentLineItemID(item.ParentLineItemID).
@@ -166,6 +168,8 @@ func (r *invoiceLineItemRepository) CreateBulk(ctx context.Context, items []*dom
 				SetEnvironmentID(item.EnvironmentID).
 				SetCommitmentInfo(item.CommitmentInfo).
 				SetCustomCurrency(item.CustomCurrency).
+				SetNillableOriginalCurrency(item.OriginalCurrency).
+				SetNillableOriginalAmount(item.OriginalAmount).
 				SetNillableSubscriptionLineItemID(item.SubscriptionLineItemID).
 				SetNillableAdjustedEntitlementQuantity(item.AdjustedEntitlementQuantity).
 				SetNillableParentLineItemID(item.ParentLineItemID).
@@ -267,12 +271,15 @@ func (r *invoiceLineItemRepository) Update(ctx context.Context, item *domaininvo
 		).
 		SetAmount(item.Amount).
 		SetQuantity(item.Quantity).
+		SetCurrency(item.Currency).
 		SetPrepaidCreditsApplied(item.PrepaidCreditsApplied).
 		SetLineItemDiscount(item.LineItemDiscount).
 		SetInvoiceLevelDiscount(item.InvoiceLevelDiscount).
 		SetMetadata(item.Metadata).
 		SetCommitmentInfo(item.CommitmentInfo).
 		SetCustomCurrency(item.CustomCurrency).
+		SetNillableOriginalCurrency(item.OriginalCurrency).
+		SetNillableOriginalAmount(item.OriginalAmount).
 		SetStatus(string(item.Status)).
 		SetUpdatedAt(time.Now().UTC()).
 		SetUpdatedBy(types.GetUserID(ctx))
