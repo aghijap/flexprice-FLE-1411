@@ -237,7 +237,7 @@ func (s *InvoiceConversionFinalizeSuite) TestOneOffRetaxRewritesTaxAppliedInBill
 		BaseModel:      types.GetDefaultBaseModel(s.ctx()),
 	}))
 
-	s.Require().NoError(s.svc.convertAndRetaxAtFinalize(s.ctx(), inv))
+	s.Require().NoError(s.svc.convertAndRetaxInvoice(s.ctx(), inv))
 
 	s.Equal("inr", inv.Currency)
 	s.True(decimal.RequireFromString("1494").Equal(inv.TotalTax), "18%% of 8300, got %s", inv.TotalTax)
@@ -278,6 +278,6 @@ func (s *InvoiceConversionFinalizeSuite) TestAmountPaidNonZeroNoOp() {
 	inv.AmountPaid = decimal.RequireFromString("100")
 
 	s.NoError(s.svc.convertAndRetaxInvoice(s.ctx(), inv))
-	s.Equal("usd", inv.Currency, "a paid invoice is not converted here (pay-first is a later PR)")
+	s.Equal("usd", inv.Currency, "a draft that already carries a payment is not converted at finalize; pay-first converts at checkout instead")
 	s.Nil(inv.FxConversion)
 }
