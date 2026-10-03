@@ -137,6 +137,34 @@ func (s *InvoiceVoidRecalculateSuite) TestVoidConverted_PartialPriorRefund_CashN
 		"usd wallet must receive $50 (cash net of prior refund), got %s", s.walletBalance(usdWallet.ID))
 }
 
+// Voiding a converted invoice records the frozen-rate conversion on the wallet transaction (§6.3):
+// the rate, the charge and billing currencies, and the billing-currency amount reversed.
+func (s *InvoiceVoidRecalculateSuite) TestVoidConverted_RecordsConversionOnWalletTransaction() {
+	usdWallet := s.buildPrepaidWallet("wallet_usd_meta", decimal.Zero)
+	// ₹8,000 cash + ₹2,000 credits ($20) at rate 100 → $100 back; billing equivalent ₹10,000.
+	inv := s.buildConvertedFinalizedInvoice("inv_conv_meta",
+		decimal.NewFromInt(8000), decimal.NewFromInt(2000), decimal.NewFromInt(20), decimal.NewFromInt(100), decimal.Zero,
+		types.PaymentStatusSucceeded)
+
+	_, err := s.service.VoidInvoice(s.GetContext(), inv.ID, dto.InvoiceVoidRequest{})
+	s.NoError(err)
+
+	txns := s.refundTxns(usdWallet.ID)
+	s.Len(txns, 1)
+	md := txns[0].Metadata
+	s.Equal("usd", md["fx_charge_currency"])
+	s.Equal("inr", md["fx_billing_currency"])
+
+	rate, err := decimal.NewFromString(md["fx_rate"])
+	s.NoError(err, "fx_rate must be recorded, got %q", md["fx_rate"])
+	s.True(decimal.NewFromInt(100).Equal(rate), "frozen rate got %s", md["fx_rate"])
+
+	billing, err := decimal.NewFromString(md["fx_billing_amount"])
+	s.NoError(err, "fx_billing_amount must be recorded, got %q", md["fx_billing_amount"])
+	s.True(decimal.NewFromInt(10000).Equal(billing),
+		"billing-currency amount reversed must be ₹10,000, got %s", md["fx_billing_amount"])
+}
+
 // The credits leg comes from fx_conversion.source exactly, not prepaid_inr ÷ rate — proving no
 // rounding drift is reintroduced on the way back.
 func (s *InvoiceVoidRecalculateSuite) TestVoidConverted_CreditsLegExactFromSource() {
