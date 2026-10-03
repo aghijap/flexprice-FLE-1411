@@ -395,6 +395,13 @@ func (s *refundService) settleToWallet(ctx context.Context, row *refund.Refund) 
 			reason = types.TransactionReasonCreditNote
 			metadata["credit_note_id"] = *row.CreditNoteID
 		}
+		// Record the frozen-rate conversion that produced this charge-currency credit (§6.3).
+		if fx := inv.FxConversion; fx != nil {
+			metadata["fx_rate"] = fx.Rate.String()
+			metadata["fx_charge_currency"] = fx.ChargeCurrency
+			metadata["fx_billing_currency"] = fx.BillingCurrency
+			metadata["fx_billing_amount"] = types.RoundToCurrencyPrecision(row.Amount.Mul(fx.Rate), fx.BillingCurrency).String()
+		}
 
 		// Keyed on the refund row, not the credit note: one credit note can fan out
 		// into several rows and they must each top up.
