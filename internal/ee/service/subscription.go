@@ -1442,7 +1442,6 @@ func buildOverridePriceRequest(originalPrice *dto.PriceResponse, override dto.Ov
 		BillingModel:         targetBillingModel,
 		InvoiceCadence:       originalPrice.InvoiceCadence,
 		TrialPeriodDays:      originalPrice.TrialPeriodDays,
-		TierMode:             originalPrice.TierMode,
 		BucketSize:           lo.Ternary(override.BucketSize != "", override.BucketSize, originalPrice.BucketSize),
 		MeterID:              originalPrice.MeterID,
 		Description:          originalPrice.Description,
@@ -1451,6 +1450,9 @@ func buildOverridePriceRequest(originalPrice *dto.PriceResponse, override dto.Ov
 		DisplayName:          originalPrice.DisplayName,      // Preserve original price display name
 		PriceUnitType:        originalPrice.PriceUnitType,    // Always copy from original (cannot be changed)
 		SkipEntityValidation: true,
+	}
+	if override.BucketSize == dto.BucketSizeNone {
+		createPriceReq.BucketSize = ""
 	}
 
 	// Handle PriceUnitConfig construction for CUSTOM price unit type
@@ -7877,7 +7879,7 @@ func (s *subscriptionService) validateSubscriptionBillingCurrency(
 	}
 	if !ok {
 		return "", ierr.NewErrorf("no conversion configured from %s to %s", sub.Currency, billing).
-			WithHintf("No exchange rate for %s. Add a global rate or custom factor before creating this subscription.", fxPairLabel(sub.Currency, billing)).
+			WithHintf("%s before creating this subscription.", missingConversionHint(ccCfg, sub.Currency, billing)).
 			WithReportableDetails(map[string]any{"from": sub.Currency, "to": billing, "missing_pairs": []string{fxPairKey(sub.Currency, billing)}}).
 			Mark(ierr.ErrValidation)
 	}

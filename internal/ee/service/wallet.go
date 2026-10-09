@@ -88,8 +88,8 @@ type WalletService interface {
 	// (periodStart, periodEnd) may still be applied to that period's draft by the expiry job.
 	HasPendingExpiringCredit(ctx context.Context, customerID, currency string, periodStart, periodEnd time.Time) (bool, error)
 
-	// EligibleCreditsAmount returns, in the wallet's currency, the credits a debit with the given
-	// reference time can use.
+	// EligibleCreditsAmount returns, in the wallet's currency, the credits an invoice for a period
+	// ending at reference can use: unexpired at reference and added before it.
 	EligibleCreditsAmount(ctx context.Context, w *wallet.Wallet, reference time.Time) (decimal.Decimal, error)
 
 	// conversion rate operations
@@ -238,6 +238,9 @@ func (s *walletService) CreateWallet(ctx context.Context, req *dto.CreateWalletR
 	if err := ccCfg.EnforceCurrency(w.Currency); err != nil {
 		return nil, err
 	}
+	if err := s.validateWalletConvertible(ctx, ccCfg, req.CustomerID, w.Currency); err != nil {
+		return nil, err
+	}
 
 	for _, existing := range existingWallets {
 		if existing.WalletStatus == types.WalletStatusActive && existing.Currency == w.Currency && existing.WalletType == w.WalletType {
@@ -302,6 +305,39 @@ func (s *walletService) CreateWallet(ctx context.Context, req *dto.CreateWalletR
 	s.publishInternalWalletWebhookEvent(ctx, types.WebhookEventWalletCreated, w.ID)
 
 	return response, nil
+}
+
+// validateWalletConvertible rejects a wallet whose currency has no rate (or custom factor) to the
+// customer's billing currency, since its top-up invoices could never be converted.
+func (s *walletService) validateWalletConvertible(ctx context.Context, ccCfg types.CustomCurrencyConfig, customerID, currency string) error {
+	cust, err := s.CustomerRepo.Get(ctx, customerID)
+	if ierr.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if cust.BillingCurrency == nil || *cust.BillingCurrency == "" || types.IsMatchingCurrency(currency, *cust.BillingCurrency) {
+		return nil
+	}
+
+	billing := strings.ToLower(*cust.BillingCurrency)
+	ok, err := conversionAvailable(ctx, s.ServiceParams, ccCfg, currency, billing)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ierr.NewErrorf("no exchange rate from %s to %s", currency, billing).
+			WithHintf("%s before creating a %s wallet for this customer.", missingConversionHint(ccCfg, currency, billing), strings.ToUpper(currency)).
+			WithReportableDetails(map[string]any{
+				"customer_id":      customerID,
+				"wallet_currency":  currency,
+				"billing_currency": billing,
+				"missing_pairs":    []string{fxPairKey(currency, billing)},
+			}).
+			Mark(ierr.ErrValidation)
+	}
+	return nil
 }
 
 func (s *walletService) EnsurePrepaidWallet(ctx context.Context, customerID, currency string) (*dto.WalletResponse, error) {
@@ -1215,7 +1251,7 @@ func (s *walletService) handlePurchasedCreditInvoicedTransaction(ctx context.Con
 			if err != nil {
 				return ierr.WithError(err).
 					WithHint("Failed to create invoice for purchased credits").
-					Mark(ierr.ErrInternal)
+					Error()
 			}
 		}
 
@@ -2584,8 +2620,8 @@ func (s *walletService) ExpireCredits(ctx context.Context, transactionID string)
 	return &types.ExpireCreditsResult{Expired: true}, nil
 }
 
-// EligibleCreditsAmount returns, in the wallet's currency, the credits a debit with the given
-// reference time can use: not expired as of reference.
+// EligibleCreditsAmount returns, in the wallet's currency, the credits an invoice for a period
+// ending at reference can use.
 func (s *walletService) EligibleCreditsAmount(ctx context.Context, w *wallet.Wallet, reference time.Time) (decimal.Decimal, error) {
 	credits, err := s.WalletRepo.FindEligibleCredits(ctx, w.ID, w.CreditBalance, 100, reference)
 	if err != nil {
@@ -2650,7 +2686,6 @@ func (s *walletService) shouldSkipCreditExpiryDueToActiveSubscriptionOrInvoice(c
 	invoiceFilter := types.NewInvoiceFilter()
 	invoiceFilter.CustomerID = tx.CustomerID
 	invoiceFilter.InvoiceType = types.InvoiceTypeSubscription
-	invoiceFilter.Currency = tx.Currency // wallets are per-currency; an EUR invoice can't be paid by a USD wallet
 	invoiceFilter.InvoiceStatus = []types.InvoiceStatus{types.InvoiceStatusFinalized, types.InvoiceStatusDraft}
 	invoiceFilter.Limit = lo.ToPtr(1000)         // bounded: a single grant period holds at most a handful of invoices
 	invoiceFilter.PeriodStartLTE = &tx.CreatedAt // period_start <= grant created_at
@@ -2667,6 +2702,10 @@ func (s *walletService) shouldSkipCreditExpiryDueToActiveSubscriptionOrInvoice(c
 	//   - FINALIZED with amount remaining: the balance can still be settled from the wallet.
 	// A finalized, fully-settled invoice releases the hold so leftover credits expire normally.
 	for _, inv := range invoices {
+		// Wallets are per-currency; a custom-currency invoice is stored in fiat but paid in its denomination.
+		if !types.IsMatchingCurrency(inv.DenominationCurrency(), tx.Currency) {
+			continue
+		}
 		holdForDraft := inv.InvoiceStatus == types.InvoiceStatusDraft
 		holdForUnsettled := inv.InvoiceStatus == types.InvoiceStatusFinalized && !inv.AmountRemaining.IsZero()
 		if holdForDraft || holdForUnsettled {

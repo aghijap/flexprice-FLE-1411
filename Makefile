@@ -529,6 +529,7 @@ help-sdk:
 	@echo "  make update-sdk          - Regenerate swagger then run sdk-all"
 	@echo "  make clean-sdk           - Remove generated api/go, api/typescript, api/python, api/mcp"
 	@echo "  make merge-custom       - Copy api/custom/<lang>/ into api/<lang>/"
+	@echo "  make ts-sdk-check       - Build the merged TypeScript SDK in a temp dir and run its custom tests"
 	@echo "  make sync-gen-to-output - Copy .speakeasy/gen/*.yaml to api/<lang>/.speakeasy/gen.yaml (run before generate)"
 	@echo "  make show-custom-files  - List files in api/custom/"
 	@echo "  make mcp-check          - Build the merged MCP server in a temp dir and run its custom tests"
@@ -656,9 +657,13 @@ filter-mcp-spec:
 sync-gen-to-output:
 	@./scripts/sync-gen-to-output.sh
 
+# Local runs skip the registry upload. The release workflow overrides this to publish the spec and
+# code samples behind the hosted docs spec (spec.speakeasy.com/flexprice/prod/swagger-json-with-code-samples).
+SPEAKEASY_RUN_FLAGS ?= --skip-upload-spec --minimal
+
 speakeasy-generate: speakeasy-validate filter-mcp-spec sync-gen-to-output
 	@echo "Generating SDKs with Speakeasy..."
-	@CI=true TERM=dumb speakeasy run --target all -y --skip-upload-spec --skip-compile --minimal
+	@CI=true TERM=dumb speakeasy run --target all -y --skip-compile $(SPEAKEASY_RUN_FLAGS)
 
 # =============================================================================
 # Single command: Swagger + SDK/MCP generation + merge custom (no testing; use make test-sdk for integration tests)
@@ -729,7 +734,24 @@ merge-custom:
 	@if [ -f api/typescript/src/index.ts ] && [ -f api/typescript/src/index.extras.ts ]; then \
 		node scripts/patch-ts-sdk-index.mjs; \
 	fi
+	@if [ -f api/typescript/src/lib/config.ts ]; then \
+		node scripts/patch-ts-sdk-config.mjs; \
+	fi
 	@echo "✓ Custom merge complete"
+
+# Build a scratch copy of the merged TS SDK and run api/custom/typescript/tests against it.
+# The copy keeps node_modules and esm/ out of api/typescript, which is uploaded and published as is.
+.PHONY: ts-sdk-check
+ts-sdk-check:
+	@test -f api/typescript/package.json || { echo "api/typescript not found; run make sdk-all first"; exit 1; }
+	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; set -e; \
+	rsync -a --exclude='node_modules' --exclude='esm' api/typescript/ "$$tmp/"; \
+	rsync -a api/custom/typescript/tests/ "$$tmp/tests/"; \
+	cd "$$tmp"; \
+	npm install --ignore-scripts --no-audit --no-fund; \
+	npm run build; \
+	node --test tests/*.test.mjs
+	@echo "✓ TypeScript SDK build and tests passed"
 
 # Force MCP package name so npm publish uses @flexprice/mcp-server.
 .PHONY: fix-mcp-package-name
