@@ -81,6 +81,8 @@ type InvoiceService interface {
 	CalculatePriceBreakdown(ctx context.Context, inv *dto.InvoiceResponse) (map[string][]dto.SourceUsageItem, error)
 	CalculateUsageBreakdown(ctx context.Context, inv *dto.InvoiceResponse, groupBy []string, forceRealtimeRecalculation bool) (map[string][]dto.UsageBreakdownItem, error)
 	GetInvoiceWithBreakdown(ctx context.Context, req dto.GetInvoiceWithBreakdownRequest) (*dto.InvoiceResponse, error)
+	// WithHostedInvoiceURLs sets hosted_invoice_url on responses returned to tenants, customers and webhooks.
+	WithHostedInvoiceURLs(ctx context.Context, invoices ...*dto.InvoiceResponse) error
 	TriggerCommunication(ctx context.Context, id string) error
 	TriggerWebhook(ctx context.Context, invoiceID string, eventName types.WebhookEventName) error
 	HandleIncompleteSubscriptionPayment(ctx context.Context, invoice *invoice.Invoice) error
@@ -1498,6 +1500,9 @@ func (s *invoiceService) performFinalizeInvoiceActions(ctx context.Context, inv 
 		if err := s.InvoiceRepo.Update(txCtx, lockedInv); err != nil {
 			return err
 		}
+		if err := NewHostedInvoiceTokenService(s.ServiceParams).Issue(txCtx, lockedInv); err != nil {
+			return err
+		}
 
 		// Update the caller's reference so downstream code sees the finalized state
 		*inv = *lockedInv
@@ -1989,6 +1994,15 @@ func (s *invoiceService) SyncInvoiceToStripeIfEnabled(ctx context.Context, invoi
 		"invoice_id", inv.ID,
 		"stripe_invoice_id", syncResponse.StripeInvoiceID,
 		"status", syncResponse.Status)
+
+	// Stripe now hosts the invoice, so the Flexprice link stops working.
+	if syncResponse.InvoiceURL != "" {
+		if err := NewHostedInvoiceTokenService(s.ServiceParams).Revoke(ctx, inv.ID); err != nil {
+			s.Logger.Error(ctx, "failed to revoke hosted invoice token after Stripe sync",
+				"error", err,
+				"invoice_id", inv.ID)
+		}
+	}
 
 	return nil
 }
@@ -4864,6 +4878,11 @@ func (s *invoiceService) UpdateInvoice(ctx context.Context, id string, req dto.U
 		if err := s.InvoiceRepo.Update(txCtx, inv); err != nil {
 			return err
 		}
+		if req.DueDate != nil && inv.InvoiceStatus == types.InvoiceStatusFinalized {
+			if err := NewHostedInvoiceTokenService(s.ServiceParams).RecalculateExpiry(txCtx, inv); err != nil {
+				return err
+			}
+		}
 		updatedInv = inv
 		return nil
 	})
@@ -4873,6 +4892,21 @@ func (s *invoiceService) UpdateInvoice(ctx context.Context, id string, req dto.U
 
 	s.publishSystemEvent(ctx, types.WebhookEventInvoiceUpdate, updatedInv.ID)
 	return dto.NewInvoiceResponse(updatedInv), nil
+}
+
+func (s *invoiceService) WithHostedInvoiceURLs(ctx context.Context, invoices ...*dto.InvoiceResponse) error {
+	if len(invoices) == 0 {
+		return nil
+	}
+	domainInvoices := lo.Map(invoices, func(r *dto.InvoiceResponse, _ int) *invoice.Invoice { return &r.Invoice })
+	urls, err := NewHostedInvoiceTokenService(s.ServiceParams).HostedInvoiceURLs(ctx, domainInvoices)
+	if err != nil {
+		return err
+	}
+	for _, r := range invoices {
+		r.WithHostedInvoiceURL(urls[r.ID])
+	}
+	return nil
 }
 
 func (s *invoiceService) TriggerCommunication(ctx context.Context, id string) error {

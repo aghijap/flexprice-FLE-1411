@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"strings"
 	"time"
 
+	"github.com/flexprice/flexprice/internal/auth"
 	"github.com/flexprice/flexprice/internal/domain/hostedinvoicetoken"
 	"github.com/flexprice/flexprice/internal/domain/invoice"
 	ierr "github.com/flexprice/flexprice/internal/errors"
@@ -19,6 +21,14 @@ type HostedInvoiceTokenService interface {
 
 	// Revoke revokes the invoice's current token if it has one.
 	Revoke(ctx context.Context, invoiceID string) error
+
+	// RecalculateExpiry resets the current token's expiry from the invoice's due date; no current token is a no-op.
+	RecalculateExpiry(ctx context.Context, inv *invoice.Invoice) error
+
+	// HostedInvoiceURLs returns each invoice's customer-facing link, keyed by invoice id: the Stripe
+	// hosted URL if the invoice synced to Stripe, else the Flexprice page link for its active token
+	// when hosted_invoice.base_url is set. Invoices with neither are absent.
+	HostedInvoiceURLs(ctx context.Context, invoices []*invoice.Invoice) (map[string]string, error)
 }
 
 type hostedInvoiceTokenService struct {
@@ -44,6 +54,61 @@ func (s *hostedInvoiceTokenService) Issue(ctx context.Context, inv *invoice.Invo
 
 func (s *hostedInvoiceTokenService) Revoke(ctx context.Context, invoiceID string) error {
 	return s.HostedInvoiceTokenRepo.RevokeByInvoiceID(ctx, invoiceID)
+}
+
+func (s *hostedInvoiceTokenService) RecalculateExpiry(ctx context.Context, inv *invoice.Invoice) error {
+	token, err := s.HostedInvoiceTokenRepo.GetCurrentByInvoiceID(ctx, inv.ID)
+	if ierr.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	expiresAt := hostedinvoicetoken.CalculateExpiry(inv.DueDate, lo.FromPtrOr(inv.FinalizedAt, token.CreatedAt), token.CreatedAt)
+	if expiresAt.Equal(token.ExpiresAt) {
+		return nil
+	}
+	// Not found here means the token was revoked after the read (Stripe switch), so there is nothing to update.
+	if err := s.HostedInvoiceTokenRepo.UpdateExpiresAt(ctx, inv.ID, expiresAt); err != nil {
+		if ierr.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	s.Logger.Info(ctx, "recalculated hosted invoice token expiry", "token_id", token.ID, "invoice_id", inv.ID)
+	return nil
+}
+
+func (s *hostedInvoiceTokenService) HostedInvoiceURLs(ctx context.Context, invoices []*invoice.Invoice) (map[string]string, error) {
+	urls := make(map[string]string, len(invoices))
+	pending := make([]string, 0, len(invoices))
+	for _, inv := range invoices {
+		if url := inv.Metadata[types.InvoiceMetadataKeyStripeHostedInvoiceURL]; url != "" {
+			urls[inv.ID] = url
+			continue
+		}
+		pending = append(pending, inv.ID)
+	}
+
+	// An empty base URL means this deployment does not serve the hosted invoice page.
+	baseURL := strings.TrimRight(s.Config.HostedInvoice.BaseURL, "/")
+	if baseURL == "" || len(pending) == 0 {
+		return urls, nil
+	}
+
+	tokens, err := s.HostedInvoiceTokenRepo.ListCurrentByInvoiceIDs(ctx, pending)
+	if err != nil {
+		return nil, err
+	}
+	signer := auth.NewHostedInvoiceSigner(s.Config)
+	now := time.Now().UTC()
+	for _, token := range tokens {
+		if token.IsActive(now) {
+			urls[token.InvoiceID] = baseURL + "/" + signer.Sign(token.ID)
+		}
+	}
+	return urls, nil
 }
 
 func (s *hostedInvoiceTokenService) getOrCreate(ctx context.Context, inv *invoice.Invoice) (*hostedinvoicetoken.HostedInvoiceToken, error) {
