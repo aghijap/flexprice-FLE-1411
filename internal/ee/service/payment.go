@@ -90,14 +90,20 @@ func (s *paymentService) CreatePayment(ctx context.Context, req *dto.CreatePayme
 		}
 	}
 
-	// Offline and credit payments need no gateway, so non-default billing entities may record them.
+	// Offline and credit payments need no gateway, so they skip the billing entity's connection check.
 	if p.PaymentMethodType != types.PaymentMethodTypeOffline && p.PaymentMethodType != types.PaymentMethodTypeCredits {
 		customerID := p.DestinationID
 		if invoice != nil {
 			customerID = invoice.CustomerID
 		}
-		if err := requireIntegrationsForCustomer(ctx, s.ServiceParams, customerID); err != nil {
+		ctx, err = NewBillingEntityService(s.ServiceParams).ScopeToCustomer(ctx, customerID)
+		if err != nil {
 			return nil, err
+		}
+		if req.PaymentGateway != nil {
+			if err := requireProviderConnected(ctx, s.ServiceParams, types.SecretProvider(*req.PaymentGateway)); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -1047,7 +1053,11 @@ func (s *paymentService) CreatePaymentForCheckout(ctx context.Context, req *dto.
 		return nil, ierr.NewError("request and invoice are required").
 			Mark(ierr.ErrValidation)
 	}
-	if err := requireIntegrationsForCustomer(ctx, s.ServiceParams, req.Invoice.CustomerID); err != nil {
+	ctx, err := NewBillingEntityService(s.ServiceParams).ScopeToCustomer(ctx, req.Invoice.CustomerID)
+	if err != nil {
+		return nil, err
+	}
+	if err := requireProviderConnected(ctx, s.ServiceParams, types.SecretProvider(req.Gateway)); err != nil {
 		return nil, err
 	}
 

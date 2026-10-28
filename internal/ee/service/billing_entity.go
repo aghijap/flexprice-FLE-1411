@@ -22,10 +22,12 @@ type BillingEntityService interface {
 	ResolveForCustomerCreate(ctx context.Context, mode types.BillingEntityMode, requested *string) (*string, error)
 	// EffectiveEntity is the customer's entity; a customer the enable backfill has not reached belongs to the default.
 	EffectiveEntity(ctx context.Context, cust *customer.Customer) (*billingentity.BillingEntity, error)
-	CustomerServesIntegrations(ctx context.Context, customerID string) (bool, error)
-	InvoiceServesIntegrations(ctx context.Context, invoiceID string) (bool, error)
-	SubscriptionServesIntegrations(ctx context.Context, subscriptionID string) (bool, error)
-	RequireCustomerIntegrations(ctx context.Context, customerID string) error
+	ScopeToCustomer(ctx context.Context, customerID string) (context.Context, error)
+	ScopeToInvoice(ctx context.Context, invoiceID string) (context.Context, error)
+	ScopeToSubscription(ctx context.Context, subscriptionID string) (context.Context, error)
+	// ScopeToDefault puts the environment's default entity in ctx; off tenants get ctx unchanged.
+	ScopeToDefault(ctx context.Context) (context.Context, error)
+	RequireProviderConnected(ctx context.Context, provider types.SecretProvider) error
 	ValidateFilter(ctx context.Context, billingEntityID string) error
 	EntityIDsForCustomers(ctx context.Context, customerIDs []string) (map[string]*string, error)
 
@@ -242,36 +244,54 @@ func (s *billingEntityService) EffectiveEntity(ctx context.Context, cust *custom
 	return def, nil
 }
 
-func (s *billingEntityService) CustomerServesIntegrations(ctx context.Context, customerID string) (bool, error) {
+func (s *billingEntityService) ScopeToCustomer(ctx context.Context, customerID string) (context.Context, error) {
 	if off, err := s.entitiesOff(ctx); err != nil || off {
-		return off, err
+		return ctx, err
 	}
-	return s.customerServesIntegrations(ctx, customerID)
+	return s.scopeToCustomer(ctx, customerID)
 }
 
-func (s *billingEntityService) InvoiceServesIntegrations(ctx context.Context, invoiceID string) (bool, error) {
+func (s *billingEntityService) ScopeToInvoice(ctx context.Context, invoiceID string) (context.Context, error) {
 	if off, err := s.entitiesOff(ctx); err != nil || off {
-		return off, err
+		return ctx, err
 	}
 	inv, err := s.InvoiceRepo.Get(ctx, invoiceID)
 	if err != nil {
-		return false, err
+		return ctx, err
 	}
-	return s.customerServesIntegrations(ctx, inv.CustomerID)
+	return s.scopeToCustomer(ctx, inv.CustomerID)
 }
 
-func (s *billingEntityService) SubscriptionServesIntegrations(ctx context.Context, subscriptionID string) (bool, error) {
+func (s *billingEntityService) ScopeToSubscription(ctx context.Context, subscriptionID string) (context.Context, error) {
 	if off, err := s.entitiesOff(ctx); err != nil || off {
-		return off, err
+		return ctx, err
 	}
 	sub, err := s.SubRepo.Get(ctx, subscriptionID)
 	if err != nil {
-		return false, err
+		return ctx, err
 	}
-	return s.customerServesIntegrations(ctx, sub.CustomerID)
+	return s.scopeToCustomer(ctx, sub.CustomerID)
 }
 
-// entitiesOff reports whether the environment has billing entities off, so every record is served without a lookup.
+func (s *billingEntityService) ScopeToDefault(ctx context.Context) (context.Context, error) {
+	if off, err := s.entitiesOff(ctx); err != nil || off {
+		return ctx, err
+	}
+	def, err := s.BillingEntityRepo.GetDefault(ctx)
+	if err != nil {
+		if ierr.IsNotFound(err) {
+			return ctx, nil
+		}
+		return ctx, err
+	}
+	return types.SetBillingEntityID(ctx, def.ID), nil
+}
+
+func (s *billingEntityService) RequireProviderConnected(ctx context.Context, provider types.SecretProvider) error {
+	return requireProviderConnected(ctx, s.ServiceParams, provider)
+}
+
+// entitiesOff reports whether the environment has billing entities off, so no record needs a lookup.
 func (s *billingEntityService) entitiesOff(ctx context.Context) (bool, error) {
 	mode, err := s.mode(ctx)
 	if err != nil {
@@ -280,16 +300,19 @@ func (s *billingEntityService) entitiesOff(ctx context.Context) (bool, error) {
 	return mode == types.BillingEntityModeOff, nil
 }
 
-func (s *billingEntityService) customerServesIntegrations(ctx context.Context, customerID string) (bool, error) {
+func (s *billingEntityService) scopeToCustomer(ctx context.Context, customerID string) (context.Context, error) {
 	cust, err := s.CustomerRepo.Get(ctx, customerID)
 	if err != nil {
-		return false, err
+		return ctx, err
 	}
 	entity, err := s.EffectiveEntity(ctx, cust)
 	if err != nil {
-		return false, err
+		return ctx, err
 	}
-	return entity == nil || entity.IsDefault, nil
+	if entity == nil {
+		return ctx, nil
+	}
+	return types.SetBillingEntityID(ctx, entity.ID), nil
 }
 
 func (s *billingEntityService) ValidateFilter(ctx context.Context, billingEntityID string) error {
@@ -400,37 +423,36 @@ func (s *billingEntityService) Update(ctx context.Context, id string, req dto.Up
 	return &dto.BillingEntityResponse{BillingEntity: updated}, nil
 }
 
-// requireIntegrationsForCustomer rejects an integration request for a customer of a non-default billing entity.
-func requireIntegrationsForCustomer(ctx context.Context, params ServiceParams, customerID string) error {
-	served, err := NewBillingEntityService(params).CustomerServesIntegrations(ctx, customerID)
+// providerConnected reports whether the billing entity in ctx has a connection for the provider; without one in ctx it is true.
+func providerConnected(ctx context.Context, params ServiceParams, provider types.SecretProvider) (bool, error) {
+	if types.GetBillingEntityID(ctx) == "" {
+		return true, nil
+	}
+	if _, err := params.ConnectionRepo.GetByProvider(ctx, provider); err != nil {
+		if ierr.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// requireProviderConnected rejects a request for a provider the billing entity in ctx has no connection for.
+func requireProviderConnected(ctx context.Context, params ServiceParams, provider types.SecretProvider) error {
+	connected, err := providerConnected(ctx, params, provider)
 	if err != nil {
 		return err
 	}
-	if !served {
-		return ierr.NewError("no integration for this customer's billing entity").
-			WithHint("No integration is available for this customer's billing entity").
-			WithReportableDetails(map[string]any{"customer_id": customerID}).
+	if !connected {
+		return ierr.NewError("provider not connected").
+			WithHintf("%s is not connected for this customer's billing entity", provider).
+			WithReportableDetails(map[string]any{
+				"provider":          provider,
+				"billing_entity_id": types.GetBillingEntityID(ctx),
+			}).
 			Mark(ierr.ErrValidation)
 	}
 	return nil
-}
-
-// skipIntegrationsForCustomer reports, and logs, whether an automatic integration step must skip this customer.
-func skipIntegrationsForCustomer(ctx context.Context, params ServiceParams, customerID, step string) (bool, error) {
-	served, err := NewBillingEntityService(params).CustomerServesIntegrations(ctx, customerID)
-	if err != nil {
-		return false, err
-	}
-	if !served {
-		params.Logger.Info(ctx, "skipping integration for non-default billing entity",
-			"customer_id", customerID,
-			"step", step)
-	}
-	return !served, nil
-}
-
-func (s *billingEntityService) RequireCustomerIntegrations(ctx context.Context, customerID string) error {
-	return requireIntegrationsForCustomer(ctx, s.ServiceParams, customerID)
 }
 
 // requireSameBillingEntity rejects combining customers of different billing entities on one invoice.

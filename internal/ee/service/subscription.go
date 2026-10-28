@@ -952,6 +952,12 @@ func triggerHubSpotDealSync(ctx context.Context, sp ServiceParams, subscriptionI
 		return
 	}
 
+	ctx, err := NewBillingEntityService(sp).ScopeToSubscription(ctx, subscriptionID)
+	if err != nil {
+		sp.Logger.Error(ctx, "failed to resolve billing entity for HubSpot deal sync", "error", err, "subscription_id", subscriptionID)
+		return
+	}
+
 	conn, err := sp.ConnectionRepo.GetByProvider(ctx, types.SecretProviderHubSpot)
 	if err != nil || conn == nil {
 		sp.Logger.Debug(ctx, "HubSpot connection not found, skipping deal sync",
@@ -988,12 +994,6 @@ func triggerHubSpotDealSync(ctx context.Context, sp ServiceParams, subscriptionI
 		sp.Logger.Debug(ctx, "customer has no HubSpot deal ID, skipping deal sync",
 			"customer_id", cust.ID,
 			"subscription_id", subscriptionID)
-		return
-	}
-	if skip, err := skipIntegrationsForCustomer(ctx, sp, cust.ID, "hubspot_deal_sync"); err != nil || skip {
-		if err != nil {
-			sp.Logger.Error(ctx, "failed to check billing entity for HubSpot deal sync", "error", err, "subscription_id", subscriptionID)
-		}
 		return
 	}
 
@@ -1054,6 +1054,12 @@ func (s *subscriptionService) triggerHubSpotQuoteSyncWorkflow(ctx context.Contex
 		return
 	}
 
+	ctx, err := NewBillingEntityService(s.ServiceParams).ScopeToCustomer(ctx, customerID)
+	if err != nil {
+		s.Logger.Error(ctx, "failed to resolve billing entity for HubSpot quote sync", "error", err, "subscription_id", subscriptionID)
+		return
+	}
+
 	conn, err := s.ConnectionRepo.GetByProvider(ctx, types.SecretProviderHubSpot)
 	if err != nil || conn == nil {
 		s.Logger.Debug(ctx, "HubSpot connection not found, skipping quote sync",
@@ -1088,12 +1094,6 @@ func (s *subscriptionService) triggerHubSpotQuoteSyncWorkflow(ctx context.Contex
 			"customer_id", customerID,
 			"subscription_id", subscriptionID)
 		return // Not an error - customer might not be from HubSpot
-	}
-	if skip, err := skipIntegrationsForCustomer(ctx, s.ServiceParams, customerID, "hubspot_quote_sync"); err != nil || skip {
-		if err != nil {
-			s.Logger.Error(ctx, "failed to check billing entity for HubSpot quote sync", "error", err, "subscription_id", subscriptionID)
-		}
-		return
 	}
 
 	// Prepare workflow input with all necessary IDs

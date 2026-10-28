@@ -76,7 +76,8 @@ func (s *integrationSyncService) syncInvoice(ctx context.Context, invoiceID stri
 			Mark(ierr.ErrValidation)
 	}
 
-	if err := requireIntegrationsForCustomer(ctx, s.ServiceParams, inv.CustomerID); err != nil {
+	ctx, err = NewBillingEntityService(s.ServiceParams).ScopeToCustomer(ctx, inv.CustomerID)
+	if err != nil {
 		return err
 	}
 
@@ -100,7 +101,8 @@ func (s *integrationSyncService) syncCustomer(ctx context.Context, customerID st
 	if _, err := s.CustomerRepo.Get(ctx, customerID); err != nil {
 		return err
 	}
-	if err := requireIntegrationsForCustomer(ctx, s.ServiceParams, customerID); err != nil {
+	ctx, err := NewBillingEntityService(s.ServiceParams).ScopeToCustomer(ctx, customerID)
+	if err != nil {
 		return err
 	}
 
