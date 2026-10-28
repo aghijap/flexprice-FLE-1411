@@ -100,6 +100,7 @@ func RegisterWorkflowsAndActivities(
 	// QuickBooks price sync activities
 	qbPriceSyncActivities := qbActivities.NewQuickBooksPriceSyncActivities(
 		params.IntegrationFactory,
+		params.ConnectionRepo,
 		params.PlanRepo,
 		params.PriceRepo,
 		params.Logger,
