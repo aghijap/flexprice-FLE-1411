@@ -23,7 +23,6 @@ type HubSpotCustomerService interface {
 		hubspotContact *ContactResponse,
 		dealID string,
 		customerService interfaces.CustomerService,
-		scope interfaces.BillingEntityScope,
 	) error
 }
 
@@ -56,7 +55,6 @@ func (s *CustomerService) CreateCustomerFromHubSpot(
 	hubspotContact *ContactResponse,
 	dealID string,
 	customerService interfaces.CustomerService,
-	scope interfaces.BillingEntityScope,
 ) error {
 	if hubspotContact == nil {
 		return ierr.NewError("nil hubspot contact").Mark(ierr.ErrValidation)
@@ -89,17 +87,8 @@ func (s *CustomerService) CreateCustomerFromHubSpot(
 
 	// Check if customer exists by email
 	if hubspotContact.Properties.Email != "" {
-		filter := &types.CustomerFilter{
-			Email:       hubspotContact.Properties.Email,
-			QueryFilter: types.NewDefaultQueryFilter(),
-		}
-
-		existingCustomers, err := customerService.GetCustomers(ctx, filter)
-		if err == nil && existingCustomers != nil && len(existingCustomers.Items) > 0 {
-			existingCustomer := existingCustomers.Items[0]
-			if !webhookscope.Customer(ctx, scope, s.logger, existingCustomer.ID) {
-				return nil
-			}
+		existingCustomer, err := webhookscope.CustomerByEmail(ctx, customerService, hubspotContact.Properties.Email)
+		if err == nil && existingCustomer != nil {
 			s.logger.Info(ctx, "customer with same email already exists, creating mapping",
 				"customer_id", existingCustomer.ID,
 				"hubspot_contact_id", hubspotContact.ID)
