@@ -149,14 +149,18 @@ func RegisterWorkflowsAndActivities(
 		params.RevenueFactRepo,
 	)
 
+	entityScope := service.NewBillingEntityService(params)
+
 	// HubSpot activities - clean and simple, delegates to existing services
 	hubspotDealSyncActivities := hubspotActivities.NewDealSyncActivities(
 		params.IntegrationFactory,
+		entityScope,
 		params.Logger,
 	)
 
 	hubspotInvoiceSyncActivities := hubspotActivities.NewInvoiceSyncActivities(
 		params.IntegrationFactory,
+		entityScope,
 		params.Logger,
 	)
 
@@ -176,6 +180,7 @@ func RegisterWorkflowsAndActivities(
 
 	hubspotQuoteSyncActivities := hubspotActivities.NewQuoteSyncActivities(
 		params.IntegrationFactory,
+		entityScope,
 		params.Logger,
 	)
 
@@ -184,11 +189,13 @@ func RegisterWorkflowsAndActivities(
 	nomodInvoiceSyncActivities := nomodActivities.NewInvoiceSyncActivities(
 		params.IntegrationFactory,
 		customerService,
+		entityScope,
 		params.Logger,
 	)
 	nomodCustomerSyncActivities := nomodActivities.NewCustomerSyncActivities(
 		params.IntegrationFactory,
 		customerService,
+		entityScope,
 		params.Logger,
 	)
 
@@ -196,6 +203,7 @@ func RegisterWorkflowsAndActivities(
 	whopInvoiceSyncActivities := whopActivities.NewInvoiceSyncActivities(
 		params.IntegrationFactory,
 		customerService,
+		entityScope,
 		params.Logger,
 	)
 
@@ -205,6 +213,7 @@ func RegisterWorkflowsAndActivities(
 		params.IntegrationFactory,
 		customerService,
 		moyasarInvoiceService,
+		entityScope,
 		params.Logger,
 	)
 
@@ -212,61 +221,74 @@ func RegisterWorkflowsAndActivities(
 	paddleInvoiceSyncActivities := paddleActivities.NewInvoiceSyncActivities(
 		params.IntegrationFactory,
 		customerService,
+		entityScope,
 		params.Logger,
 	)
 	paddleCustomerSyncActivities := paddleActivities.NewCustomerSyncActivities(
 		params.IntegrationFactory,
 		customerService,
 		params.InvoiceRepo,
+		entityScope,
 		params.Logger,
 	)
 	paddleSubscriptionSyncActivities := paddleActivities.NewSubscriptionSyncActivities(
 		params.IntegrationFactory,
+		entityScope,
 		params.Logger,
 	)
 
 	// Stripe/Razorpay/Chargebee/QuickBooks invoice sync activities
 	stripeInvoiceSyncActivities := stripeActivities.NewInvoiceSyncActivities(
 		params,
+		entityScope,
 		params.Logger,
 	)
 	stripeCustomerSyncActivities := stripeActivities.NewCustomerSyncActivities(
 		params.IntegrationFactory,
 		customerService,
+		entityScope,
 		params.Logger,
 	)
 	razorpayInvoiceSyncActivities := razorpayActivities.NewInvoiceSyncActivities(
 		params,
+		entityScope,
 		params.Logger,
 	)
 	razorpayCustomerSyncActivities := razorpayActivities.NewCustomerSyncActivities(
 		params.IntegrationFactory,
 		customerService,
+		entityScope,
 		params.Logger,
 	)
 	chargebeeInvoiceSyncActivities := chargebeeActivities.NewInvoiceSyncActivities(
 		params,
+		entityScope,
 		params.Logger,
 	)
 	chargebeeCustomerSyncActivities := chargebeeActivities.NewCustomerSyncActivities(
 		params.IntegrationFactory,
+		entityScope,
 		params.Logger,
 	)
 	qbInvoiceSyncActivities := qbActivities.NewQuickBooksInvoiceSyncActivities(
 		params,
+		entityScope,
 		params.Logger,
 	)
 	qbCustomerSyncActivities := qbActivities.NewQuickBooksCustomerSyncActivities(
 		params.IntegrationFactory,
 		customerService,
+		entityScope,
 		params.Logger,
 	)
 	zohoInvoiceSyncActivities := zohoActivities.NewInvoiceSyncActivities(
 		params.IntegrationFactory,
+		entityScope,
 		params.Logger,
 	)
 	tabsInvoiceSyncActivities := tabsActivities.NewInvoiceSyncActivities(
 		params.IntegrationFactory,
+		entityScope,
 		params.Logger,
 	)
 
@@ -315,7 +337,7 @@ func RegisterWorkflowsAndActivities(
 	)
 	marketplaceSnapshotActivities := marketplaceActivities.NewSnapshotActivities(params, params.Logger)
 	marketplaceReportActivities := marketplaceActivities.NewReportActivities(params, mktplaceReporter, params.Logger)
-	marketplaceFlushActivities := marketplaceActivities.NewFlushActivities(params, mktplaceReporter, params.Logger)
+	marketplaceFlushActivities := marketplaceActivities.NewFlushActivities(params, mktplaceReporter, entityScope, params.Logger)
 
 	cronBundle := &cronActivityBundle{
 		creditGrant:                  cronActivities.NewCreditGrantActivities(creditGrantService, params.Logger),
