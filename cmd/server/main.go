@@ -330,7 +330,7 @@ func main() {
 			service.NewTaxService,
 			service.NewFXRateService,
 			service.NewBillingEntityService,
-			provideBillingEntityGuard,
+			provideBillingEntityScope,
 			service.NewHostedInvoiceTokenService,
 			service.NewHostedInvoiceService,
 			service.NewCouponService,
@@ -927,6 +927,6 @@ func enrichServiceParams(base service.ServiceParams, revenueFacts interfaces.Rev
 	return base
 }
 
-func provideBillingEntityGuard(s service.BillingEntityService) interfaces.BillingEntityGuard {
+func provideBillingEntityScope(s service.BillingEntityService) interfaces.BillingEntityScope {
 	return s
 }

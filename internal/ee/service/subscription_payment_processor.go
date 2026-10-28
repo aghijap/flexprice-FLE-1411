@@ -737,12 +737,11 @@ func (s *subscriptionPaymentProcessor) processPaymentMethodCharge(
 		"amount", amount,
 	)
 
-	if skip, err := skipIntegrationsForCustomer(ctx, *s.ServiceParams, inv.CustomerID, "invoice_card_charge"); err != nil || skip {
-		if err != nil {
-			s.Logger.Error(ctx, "failed to resolve billing entity for card charge",
-				"error", err,
-				"invoice_id", inv.ID)
-		}
+	ctx, err := NewBillingEntityService(*s.ServiceParams).ScopeToCustomer(ctx, inv.CustomerID)
+	if err != nil {
+		s.Logger.Error(ctx, "failed to resolve billing entity for card charge",
+			"error", err,
+			"invoice_id", inv.ID)
 		return decimal.Zero
 	}
 

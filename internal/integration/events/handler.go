@@ -28,7 +28,7 @@ type Handler interface {
 type Deps struct {
 	ConnectionRepo connection.Repository
 	EIMRepo        entityintegrationmapping.Repository
-	EntityGuard    interfaces.BillingEntityGuard
+	EntityScope    interfaces.BillingEntityScope
 	Logger         *logger.Logger
 	Config         *config.Configuration
 	PubSub         pubsub.PubSub
@@ -187,24 +187,18 @@ func (h *handler) processMessage(ctx context.Context, msg *message.Message) erro
 		"environment_id", event.EnvironmentID,
 	)
 
-	skip, err := h.skipForBillingEntity(ctx, &event)
+	ctx, err := h.scopeEvent(ctx, &event)
 	if err != nil {
-		return h.processIntegrationError(err, &event, msg.UUID, "billing_entity_guard")
-	}
-	if skip {
-		h.deps.Logger.Info(ctx, "skipping integration for non-default billing entity",
-			"message_uuid", msg.UUID,
-			"event_name", event.EventName)
-		return nil
+		return h.processIntegrationError(err, &event, msg.UUID, "billing_entity_scope")
 	}
 
 	return h.processIntegrationError(processor(ctx, &event, msg), &event, msg.UUID, "dispatch")
 }
 
-// skipForBillingEntity reports whether the event's customer belongs to a non-default billing entity.
-func (h *handler) skipForBillingEntity(ctx context.Context, event *types.WebhookEvent) (bool, error) {
-	if h.deps.EntityGuard == nil {
-		return false, nil
+// scopeEvent puts the billing entity of the event's customer, invoice or subscription in ctx.
+func (h *handler) scopeEvent(ctx context.Context, event *types.WebhookEvent) (context.Context, error) {
+	if h.deps.EntityScope == nil {
+		return ctx, nil
 	}
 
 	var ids struct {
@@ -213,23 +207,17 @@ func (h *handler) skipForBillingEntity(ctx context.Context, event *types.Webhook
 		SubscriptionID string `json:"subscription_id"`
 	}
 	if err := json.Unmarshal(event.Payload, &ids); err != nil {
-		return false, nil
+		return ctx, nil
 	}
 
-	var served bool
-	var err error
 	switch {
 	case ids.CustomerID != "":
-		served, err = h.deps.EntityGuard.CustomerServesIntegrations(ctx, ids.CustomerID)
+		return h.deps.EntityScope.ScopeToCustomer(ctx, ids.CustomerID)
 	case ids.InvoiceID != "":
-		served, err = h.deps.EntityGuard.InvoiceServesIntegrations(ctx, ids.InvoiceID)
+		return h.deps.EntityScope.ScopeToInvoice(ctx, ids.InvoiceID)
 	case ids.SubscriptionID != "":
-		served, err = h.deps.EntityGuard.SubscriptionServesIntegrations(ctx, ids.SubscriptionID)
+		return h.deps.EntityScope.ScopeToSubscription(ctx, ids.SubscriptionID)
 	default:
-		return false, nil
+		return ctx, nil
 	}
-	if err != nil {
-		return false, err
-	}
-	return !served, nil
 }

@@ -147,74 +147,61 @@ func (s *BillingEntityServiceSuite) TestEffectiveEntity() {
 	})
 }
 
-func (s *BillingEntityServiceSuite) TestCustomerServesIntegrations() {
+func (s *BillingEntityServiceSuite) TestScopeToCustomer() {
 	env := types.GetEnvironmentID(s.GetContext())
+
+	s.Run("off", func() {
+		s.ClearStores()
+		s.setMode(types.BillingEntityModeOff)
+
+		// The customer does not exist, so any read would fail.
+		ctx, err := s.service.ScopeToCustomer(s.GetContext(), "c_missing")
+		s.Require().NoError(err)
+		s.Empty(types.GetBillingEntityID(ctx))
+	})
 
 	tests := []struct {
 		name     string
 		mode     types.BillingEntityMode
 		customer *string
-		want     bool
+		want     string
 	}{
-		{name: "off_no_entity", mode: types.BillingEntityModeOff, want: true},
-		{name: "stored_default", mode: types.BillingEntityModeEnabled, customer: lo.ToPtr("be_default"), want: true},
-		{name: "stored_non_default", mode: types.BillingEntityModeEnabled, customer: lo.ToPtr("be_eu"), want: false},
-		{name: "unassigned_while_enabling", mode: types.BillingEntityModeEnabling, want: true},
+		{name: "enabling_unassigned", mode: types.BillingEntityModeEnabling, want: "be_default"},
+		{name: "enabled_assigned", mode: types.BillingEntityModeEnabled, customer: lo.ToPtr("be_eu"), want: "be_eu"},
 	}
 
 	for _, tc := range tests {
 		s.Run(tc.name, func() {
 			s.ClearStores()
 			s.setMode(tc.mode)
-			if tc.mode != types.BillingEntityModeOff {
-				s.addEntity("be_default", env, "INV", true)
-				s.addEntity("be_eu", env, "EU", false)
-			}
+			s.addEntity("be_default", env, "INV", true)
+			s.addEntity("be_eu", env, "EU", false)
 			s.addCustomer("c1", tc.customer)
 
-			got, err := s.service.CustomerServesIntegrations(s.GetContext(), "c1")
+			ctx, err := s.service.ScopeToCustomer(s.GetContext(), "c1")
 			s.Require().NoError(err)
-			s.Equal(tc.want, got)
+			s.Equal(tc.want, types.GetBillingEntityID(ctx))
 		})
 	}
-
-	s.Run("off_missing_record_is_served", func() {
-		s.ClearStores()
-		s.setMode(types.BillingEntityModeOff)
-
-		served, err := s.service.CustomerServesIntegrations(s.GetContext(), "c_missing")
-		s.Require().NoError(err)
-		s.True(served)
-		served, err = s.service.SubscriptionServesIntegrations(s.GetContext(), "sub_missing")
-		s.Require().NoError(err)
-		s.True(served)
-	})
 }
 
-func (s *BillingEntityServiceSuite) TestSubscriptionServesIntegrations() {
+func (s *BillingEntityServiceSuite) TestScopeToSubscription() {
 	env := types.GetEnvironmentID(s.GetContext())
 	s.ClearStores()
 	s.setMode(types.BillingEntityModeEnabled)
 	s.addEntity("be_default", env, "INV", true)
 	s.addEntity("be_eu", env, "EU", false)
 	s.addCustomer("c_eu", lo.ToPtr("be_eu"))
-	s.addCustomer("c_default", lo.ToPtr("be_default"))
 
 	ctx := s.GetContext()
-	for id, customerID := range map[string]string{"sub_eu": "c_eu", "sub_default": "c_default"} {
-		s.Require().NoError(s.GetStores().SubscriptionRepo.Create(ctx, &subscription.Subscription{
-			ID:            id,
-			CustomerID:    customerID,
-			EnvironmentID: env,
-			BaseModel:     types.GetDefaultBaseModel(ctx),
-		}))
-	}
+	s.Require().NoError(s.GetStores().SubscriptionRepo.Create(ctx, &subscription.Subscription{
+		ID:            "sub_eu",
+		CustomerID:    "c_eu",
+		EnvironmentID: env,
+		BaseModel:     types.GetDefaultBaseModel(ctx),
+	}))
 
-	served, err := s.service.SubscriptionServesIntegrations(ctx, "sub_eu")
+	scoped, err := s.service.ScopeToSubscription(ctx, "sub_eu")
 	s.Require().NoError(err)
-	s.False(served)
-
-	served, err = s.service.SubscriptionServesIntegrations(ctx, "sub_default")
-	s.Require().NoError(err)
-	s.True(served)
+	s.Equal("be_eu", types.GetBillingEntityID(scoped))
 }
