@@ -19,7 +19,7 @@ type BillingEntityService interface {
 	// WithMode runs fn in a transaction holding the shared enable lock, with the mode read from the database.
 	WithMode(ctx context.Context, fn func(txCtx context.Context, mode types.BillingEntityMode) error) error
 	GetOrCreateDefault(ctx context.Context) (*billingentity.BillingEntity, error)
-	ResolveForCustomerCreate(ctx context.Context, mode types.BillingEntityMode, requested *string) (*string, error)
+	ResolveForCreate(ctx context.Context, mode types.BillingEntityMode, requested *string) (*string, error)
 	// EffectiveEntity is the customer's entity; a customer the enable backfill has not reached belongs to the default.
 	EffectiveEntity(ctx context.Context, cust *customer.Customer) (*billingentity.BillingEntity, error)
 	ScopeToCustomer(ctx context.Context, customerID string) (context.Context, error)
@@ -171,7 +171,7 @@ func (s *billingEntityService) createDefault(ctx context.Context) (*billingentit
 	return entity, nil
 }
 
-func (s *billingEntityService) ResolveForCustomerCreate(ctx context.Context, mode types.BillingEntityMode, requested *string) (*string, error) {
+func (s *billingEntityService) ResolveForCreate(ctx context.Context, mode types.BillingEntityMode, requested *string) (*string, error) {
 	if lo.FromPtr(requested) == "" {
 		requested = nil
 	}
