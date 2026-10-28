@@ -12,6 +12,7 @@ import (
 	"github.com/flexprice/flexprice/internal/interfaces"
 	"github.com/flexprice/flexprice/internal/logger"
 	"github.com/flexprice/flexprice/internal/types"
+	"github.com/samber/lo"
 )
 
 // HubSpotCustomerService defines the interface for HubSpot customer operations
@@ -62,10 +63,16 @@ func (s *CustomerService) CreateCustomerFromHubSpot(
 	}
 	// Check if customer already exists by HubSpot contact ID in entity integration mapping
 	if s.entityIntegrationMappingRepo != nil {
+		conn, err := s.client.GetConnection(ctx)
+		if err != nil {
+			return err
+		}
+
 		filter := &types.EntityIntegrationMappingFilter{
 			EntityType:        types.IntegrationEntityTypeCustomer,
 			ProviderTypes:     []string{string(types.SecretProviderHubSpot)},
 			ProviderEntityIDs: []string{hubspotContact.ID},
+			ConnectionID:      conn.ID,
 		}
 
 		existingMappings, err := s.entityIntegrationMappingRepo.List(ctx, filter)
@@ -169,6 +176,11 @@ func (s *CustomerService) createEntityIntegrationMapping(
 		return nil
 	}
 
+	conn, err := s.client.GetConnection(ctx)
+	if err != nil {
+		return err
+	}
+
 	mapping := &entityintegrationmapping.EntityIntegrationMapping{
 		ID:               types.GenerateUUIDWithPrefix(types.UUID_PREFIX_ENTITY_INTEGRATION_MAPPING),
 		EntityID:         customerID,
@@ -182,9 +194,10 @@ func (s *CustomerService) createEntityIntegrationMapping(
 		},
 		EnvironmentID: types.GetEnvironmentID(ctx),
 		BaseModel:     types.GetDefaultBaseModel(ctx),
+		ConnectionID:  lo.ToPtr(conn.ID),
 	}
 
-	err := s.entityIntegrationMappingRepo.Create(ctx, mapping)
+	err = s.entityIntegrationMappingRepo.Create(ctx, mapping)
 	if err != nil {
 		s.logger.Info(context.Background(), "failed to create entity mapping for customer",
 			"error", err,

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flexprice/flexprice/internal/domain/connection"
 	"github.com/flexprice/flexprice/internal/domain/customer"
 	"github.com/flexprice/flexprice/internal/domain/entityintegrationmapping"
 	"github.com/flexprice/flexprice/internal/domain/invoice"
@@ -32,6 +33,10 @@ type fakeSyncZohoClient struct {
 	updateInvoiceReq   *InvoiceCreateRequest
 	updateInvoiceCalls int
 	submitCalls        int
+}
+
+func (f *fakeSyncZohoClient) GetConnection(_ context.Context) (*connection.Connection, error) {
+	return &connection.Connection{ID: "conn_test", ProviderType: types.SecretProviderZohoBooks}, nil
 }
 
 func (f *fakeSyncZohoClient) UpdateInvoice(_ context.Context, zohoInvoiceID string, req *InvoiceCreateRequest) (*InvoiceResponse, error) {

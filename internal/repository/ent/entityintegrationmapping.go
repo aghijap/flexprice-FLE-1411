@@ -75,6 +75,7 @@ func (r *entityIntegrationMappingRepository) Create(ctx context.Context, mapping
 		SetCreatedBy(mapping.CreatedBy).
 		SetUpdatedBy(mapping.UpdatedBy).
 		SetEnvironmentID(mapping.EnvironmentID).
+		SetNillableConnectionID(mapping.ConnectionID).
 		Save(ctx)
 
 	if err != nil {
@@ -265,6 +266,7 @@ func (r *entityIntegrationMappingRepository) Update(ctx context.Context, mapping
 		SetProviderType(mapping.ProviderType).
 		SetProviderEntityID(mapping.ProviderEntityID).
 		SetMetadata(mapping.Metadata).
+		SetNillableConnectionID(mapping.ConnectionID).
 		SetStatus(string(mapping.Status)).
 		SetUpdatedAt(time.Now().UTC()).
 		SetUpdatedBy(types.GetUserID(ctx))
@@ -449,6 +451,13 @@ func (o EntityIntegrationMappingQueryOptions) applyEntityQueryOptions(_ context.
 
 	if len(f.ProviderEntityIDs) > 0 {
 		query = query.Where(entityintegrationmapping.ProviderEntityIDIn(f.ProviderEntityIDs...))
+	}
+
+	if f.ConnectionID != "" {
+		query = query.Where(entityintegrationmapping.Or(
+			entityintegrationmapping.ConnectionID(f.ConnectionID),
+			entityintegrationmapping.ConnectionIDIsNil(),
+		))
 	}
 
 	if f.Filters != nil {

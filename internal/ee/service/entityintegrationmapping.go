@@ -10,6 +10,7 @@ import (
 	ierr "github.com/flexprice/flexprice/internal/errors"
 	"github.com/flexprice/flexprice/internal/interfaces"
 	"github.com/flexprice/flexprice/internal/types"
+	"github.com/samber/lo"
 )
 
 type EntityIntegrationMappingService = interfaces.EntityIntegrationMappingService
@@ -29,6 +30,9 @@ func (s *entityIntegrationMappingService) CreateEntityIntegrationMapping(ctx con
 	}
 
 	mapping := req.ToEntityIntegrationMapping(ctx)
+	if err := s.setProviderConnection(ctx, mapping); err != nil {
+		return nil, err
+	}
 
 	// Validate the mapping
 	if err := entityintegrationmapping.Validate(mapping); err != nil {
@@ -146,6 +150,10 @@ func (s *entityIntegrationMappingService) UpdateEntityIntegrationMapping(ctx con
 	mapping.UpdatedAt = time.Now().UTC()
 	mapping.UpdatedBy = types.GetUserID(ctx)
 
+	if err := s.setProviderConnection(ctx, mapping); err != nil {
+		return nil, err
+	}
+
 	// Validate the updated mapping
 	if err := entityintegrationmapping.Validate(mapping); err != nil {
 		return nil, ierr.WithError(err).
@@ -195,6 +203,20 @@ func (s *entityIntegrationMappingService) DeleteEntityIntegrationMapping(ctx con
 	return nil
 }
 
+// setProviderConnection fills a missing connection with the provider's connection in ctx.
+func (s *entityIntegrationMappingService) setProviderConnection(ctx context.Context, mapping *entityintegrationmapping.EntityIntegrationMapping) error {
+	provider := types.SecretProvider(mapping.ProviderType)
+	if mapping.ConnectionID != nil || provider.Validate() != nil {
+		return nil
+	}
+	conn, err := s.ConnectionRepo.GetByProvider(ctx, provider)
+	if err != nil {
+		return err
+	}
+	mapping.ConnectionID = lo.ToPtr(conn.ID)
+	return nil
+}
+
 func (s *entityIntegrationMappingService) LinkIntegrationMapping(ctx context.Context, req dto.LinkIntegrationMappingRequest) (*dto.LinkIntegrationMappingResponse, error) {
 	if err := req.Validate(); err != nil {
 		return nil, err
@@ -216,7 +238,7 @@ func (s *entityIntegrationMappingService) LinkIntegrationMapping(ctx context.Con
 	if err := s.applyEntitySideEffects(ctx, req); err != nil {
 		return nil, err
 	}
-	mapping, err := s.upsertEntityMapping(ctx, req)
+	mapping, err := s.upsertEntityMapping(ctx, req, connections[0].ID)
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +307,7 @@ func (s *entityIntegrationMappingService) DelinkIntegrationMapping(ctx context.C
 	}, nil
 }
 
-func (s *entityIntegrationMappingService) upsertEntityMapping(ctx context.Context, req dto.LinkIntegrationMappingRequest) (*entityintegrationmapping.EntityIntegrationMapping, error) {
+func (s *entityIntegrationMappingService) upsertEntityMapping(ctx context.Context, req dto.LinkIntegrationMappingRequest, connectionID string) (*entityintegrationmapping.EntityIntegrationMapping, error) {
 	// Published rows only. An archived row left behind by an earlier unlink must not be updated in
 	// place: reviving it would overwrite the record of when it was archived, which is the only trace
 	// of that unlink. Re-linking therefore falls through to the create below and gets a fresh row.
@@ -296,6 +318,7 @@ func (s *entityIntegrationMappingService) upsertEntityMapping(ctx context.Contex
 		ProviderTypes: []string{
 			req.ProviderType,
 		},
+		ConnectionID: connectionID,
 	}
 	existing, err := s.EntityIntegrationMappingRepo.List(ctx, filter)
 	if err != nil {
@@ -313,6 +336,7 @@ func (s *entityIntegrationMappingService) upsertEntityMapping(ctx context.Contex
 		mapping := existing[0]
 		mapping.ProviderEntityID = req.ProviderEntityID
 		mapping.Metadata = metadata
+		mapping.ConnectionID = lo.ToPtr(connectionID)
 		mapping.UpdatedAt = time.Now().UTC()
 		mapping.UpdatedBy = types.GetUserID(ctx)
 		if err := s.EntityIntegrationMappingRepo.Update(ctx, mapping); err != nil {
@@ -329,6 +353,7 @@ func (s *entityIntegrationMappingService) upsertEntityMapping(ctx context.Contex
 		ProviderEntityID: req.ProviderEntityID,
 		Metadata:         metadata,
 		EnvironmentID:    types.GetEnvironmentID(ctx),
+		ConnectionID:     lo.ToPtr(connectionID),
 		BaseModel:        types.GetDefaultBaseModel(ctx),
 	}
 	if err := entityintegrationmapping.Validate(mapping); err != nil {

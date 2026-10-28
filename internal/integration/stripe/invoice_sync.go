@@ -508,10 +508,16 @@ func (s *InvoiceSyncService) GetFlexPriceInvoiceID(ctx context.Context, stripeIn
 		return "", ierr.NewError("entity integration mapping repository not available").Mark(ierr.ErrNotFound)
 	}
 
+	conn, err := s.client.GetConnection(ctx)
+	if err != nil {
+		return "", err
+	}
+
 	filter := &types.EntityIntegrationMappingFilter{
 		ProviderEntityIDs: []string{stripeInvoiceID},
 		EntityType:        types.IntegrationEntityTypeInvoice,
 		ProviderTypes:     []string{"stripe"},
+		ConnectionID:      conn.ID,
 		QueryFilter:       types.NewDefaultQueryFilter(),
 	}
 
@@ -543,10 +549,16 @@ func (s *InvoiceSyncService) getExistingStripeMapping(ctx context.Context, invoi
 		return nil, ierr.NewError("entity integration mapping repository not available").Mark(ierr.ErrNotFound)
 	}
 
+	conn, err := s.client.GetConnection(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	filter := &types.EntityIntegrationMappingFilter{
 		EntityID:      invoiceID,
 		EntityType:    types.IntegrationEntityTypeInvoice,
 		ProviderTypes: []string{"stripe"},
+		ConnectionID:  conn.ID,
 		QueryFilter:   types.NewDefaultQueryFilter(),
 	}
 
@@ -569,6 +581,11 @@ func (s *InvoiceSyncService) createInvoiceMapping(ctx context.Context, invoiceID
 		return nil
 	}
 
+	conn, err := s.client.GetConnection(ctx)
+	if err != nil {
+		return err
+	}
+
 	mapping := &entityintegrationmapping.EntityIntegrationMapping{
 		ID:               types.GenerateUUIDWithPrefix(types.UUID_PREFIX_ENTITY_INTEGRATION_MAPPING),
 		EntityID:         invoiceID,
@@ -580,6 +597,7 @@ func (s *InvoiceSyncService) createInvoiceMapping(ctx context.Context, invoiceID
 			"sync_source":    "flexprice",
 		},
 		EnvironmentID: types.GetEnvironmentID(ctx),
+		ConnectionID:  lo.ToPtr(conn.ID),
 		BaseModel:     types.GetDefaultBaseModel(ctx),
 	}
 

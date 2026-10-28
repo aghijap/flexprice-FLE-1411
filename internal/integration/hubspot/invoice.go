@@ -12,6 +12,7 @@ import (
 	ierr "github.com/flexprice/flexprice/internal/errors"
 	"github.com/flexprice/flexprice/internal/logger"
 	"github.com/flexprice/flexprice/internal/types"
+	"github.com/samber/lo"
 	"github.com/shopspring/decimal"
 )
 
@@ -46,11 +47,17 @@ func (s *InvoiceSyncService) SyncInvoiceToHubSpot(ctx context.Context, invoiceID
 			Mark(ierr.ErrNotFound)
 	}
 
+	conn, err := s.client.GetConnection(ctx)
+	if err != nil {
+		return err
+	}
+
 	// Check if invoice is already synced to avoid duplicates
 	filter := &types.EntityIntegrationMappingFilter{
 		EntityType:    types.IntegrationEntityTypeInvoice,
 		EntityID:      invoiceID,
 		ProviderTypes: []string{string(types.SecretProviderHubSpot)},
+		ConnectionID:  conn.ID,
 	}
 	existingMappings, err := s.entityIntegrationMappingRepo.List(ctx, filter)
 	if err == nil && len(existingMappings) > 0 {
@@ -138,6 +145,7 @@ func (s *InvoiceSyncService) SyncInvoiceToHubSpot(ctx context.Context, invoiceID
 		Metadata:         make(map[string]interface{}),
 		EnvironmentID:    inv.EnvironmentID,
 		BaseModel:        types.GetDefaultBaseModel(ctx),
+		ConnectionID:     lo.ToPtr(conn.ID),
 	}
 
 	if err := s.entityIntegrationMappingRepo.Create(ctx, mapping); err != nil {
@@ -255,10 +263,16 @@ func (s *InvoiceSyncService) GetHubSpotContactID(ctx context.Context, customerID
 			Mark(ierr.ErrNotFound)
 	}
 
+	conn, err := s.client.GetConnection(ctx)
+	if err != nil {
+		return "", err
+	}
+
 	filter := &types.EntityIntegrationMappingFilter{
 		EntityType:    types.IntegrationEntityTypeCustomer,
 		EntityID:      customerID,
 		ProviderTypes: []string{string(types.SecretProviderHubSpot)},
+		ConnectionID:  conn.ID,
 	}
 
 	mappings, err := s.entityIntegrationMappingRepo.List(ctx, filter)

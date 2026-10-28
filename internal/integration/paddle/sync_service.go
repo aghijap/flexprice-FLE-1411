@@ -105,11 +105,17 @@ func (s *PaddleSyncService) EnsureCustomerSynced(ctx context.Context, req Ensure
 			Mark(ierr.ErrValidation)
 	}
 
+	conn, err := s.client.GetConnection(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	// Check for an existing mapping.
 	filter := &types.EntityIntegrationMappingFilter{
 		EntityID:      req.CustomerID,
 		EntityType:    types.IntegrationEntityTypeCustomer,
 		ProviderTypes: []string{string(types.SecretProviderPaddle)},
+		ConnectionID:  conn.ID,
 	}
 	resp, err := s.mappingService.GetEntityIntegrationMappings(ctx, filter)
 	if err != nil {
@@ -184,6 +190,7 @@ func (s *PaddleSyncService) EnsureCustomerSynced(ctx context.Context, req Ensure
 		ProviderType:     string(types.SecretProviderPaddle),
 		ProviderEntityID: paddleCustomerID,
 		Metadata:         meta,
+		ConnectionID:     lo.ToPtr(conn.ID),
 	})
 	if createErr != nil {
 		return nil, createErr
@@ -232,11 +239,17 @@ func (s *PaddleSyncService) EnsureBulkProductSynced(ctx context.Context, req Ens
 		}
 	}
 
+	conn, err := s.client.GetConnection(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	bulkResp, err := s.mappingService.GetEntityIntegrationMappings(ctx, &types.EntityIntegrationMappingFilter{
 		EntityIDs:     priceIDs,
 		EntityType:    types.IntegrationEntityTypePrice,
 		ProviderTypes: []string{string(types.SecretProviderPaddle)},
 		QueryFilter:   types.NewDefaultQueryFilter(),
+		ConnectionID:  conn.ID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("fetching existing product mappings: %w", err)
@@ -275,6 +288,7 @@ func (s *PaddleSyncService) EnsureBulkProductSynced(ctx context.Context, req Ens
 				MetaKeyPaddleProductID: product.ID,
 				MetaKeySyncedAt:        time.Now().UTC().Format(time.RFC3339),
 			},
+			ConnectionID: lo.ToPtr(conn.ID),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("persisting product mapping for price %s: %w", item.PriceID, err)
@@ -299,11 +313,17 @@ func (s *PaddleSyncService) EnsureSubscriptionSynced(ctx context.Context, req En
 		return nil, ierr.NewError("subscription is required").Mark(ierr.ErrValidation)
 	}
 
+	conn, err := s.client.GetConnection(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	// Guard 1: fully activated — mapping exists.
 	filter := &types.EntityIntegrationMappingFilter{
 		EntityID:      sub.ID,
 		EntityType:    types.IntegrationEntityTypeSubscription,
 		ProviderTypes: []string{string(types.SecretProviderPaddle)},
+		ConnectionID:  conn.ID,
 	}
 	mappingResp, err := s.mappingService.GetEntityIntegrationMappings(ctx, filter)
 	if err != nil {
@@ -503,10 +523,16 @@ func (s *PaddleSyncService) syncAddressForMapping(
 
 // getExistingInvoiceMapping checks entity_integration_mapping for a prior Paddle sync of this invoice.
 func (s *PaddleSyncService) getExistingInvoiceMapping(ctx context.Context, invoiceID string) (*apidto.EntityIntegrationMappingResponse, error) {
+	conn, err := s.client.GetConnection(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	filter := &types.EntityIntegrationMappingFilter{
 		EntityType:    types.IntegrationEntityTypeInvoice,
 		EntityID:      invoiceID,
 		ProviderTypes: []string{string(types.SecretProviderPaddle)},
+		ConnectionID:  conn.ID,
 	}
 	resp, err := s.mappingService.GetEntityIntegrationMappings(ctx, filter)
 	if err != nil {
@@ -780,12 +806,18 @@ func (s *PaddleSyncService) SyncInvoice(ctx context.Context, req SyncInvoiceRequ
 	if txn.InvoiceNumber != nil {
 		invoiceMeta[MetaKeyInvoiceNumber] = *txn.InvoiceNumber
 	}
+	conn, err := s.client.GetConnection(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	_, err = s.mappingService.CreateEntityIntegrationMapping(ctx, apidto.CreateEntityIntegrationMappingRequest{
 		EntityType:       types.IntegrationEntityTypeInvoice,
 		EntityID:         req.InvoiceID,
 		ProviderType:     string(types.SecretProviderPaddle),
 		ProviderEntityID: txn.ID,
 		Metadata:         invoiceMeta,
+		ConnectionID:     lo.ToPtr(conn.ID),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("persisting invoice mapping: %w", err)
@@ -802,10 +834,16 @@ func (s *PaddleSyncService) SyncInvoice(ctx context.Context, req SyncInvoiceRequ
 
 // GetSubscriptionMappingStatus returns true if a Paddle entity_integration_mapping exists for the subscription.
 func (s *PaddleSyncService) GetSubscriptionMappingStatus(ctx context.Context, subscriptionID string) (bool, error) {
+	conn, err := s.client.GetConnection(ctx)
+	if err != nil {
+		return false, err
+	}
+
 	resp, err := s.mappingService.GetEntityIntegrationMappings(ctx, &types.EntityIntegrationMappingFilter{
 		EntityID:      subscriptionID,
 		EntityType:    types.IntegrationEntityTypeSubscription,
 		ProviderTypes: []string{string(types.SecretProviderPaddle)},
+		ConnectionID:  conn.ID,
 	})
 	if err != nil {
 		return false, fmt.Errorf("checking subscription mapping: %w", err)
@@ -826,11 +864,17 @@ func (s *PaddleSyncService) GetInvoiceByID(ctx context.Context, invoiceID string
 // GetFlexPriceInvoiceIDByTransaction looks up the FlexPrice invoice ID for a Paddle transaction ID.
 // Used by the webhook handler to find the invoice associated with a completed payment.
 func (s *PaddleSyncService) GetFlexPriceInvoiceIDByTransaction(ctx context.Context, paddleTransactionID string) (string, error) {
+	conn, err := s.client.GetConnection(ctx)
+	if err != nil {
+		return "", err
+	}
+
 	filter := &types.EntityIntegrationMappingFilter{
 		ProviderEntityIDs: []string{paddleTransactionID},
 		EntityType:        types.IntegrationEntityTypeInvoice,
 		ProviderTypes:     []string{string(types.SecretProviderPaddle)},
 		QueryFilter:       types.NewDefaultQueryFilter(),
+		ConnectionID:      conn.ID,
 	}
 	resp, err := s.mappingService.GetEntityIntegrationMappings(ctx, filter)
 	if err != nil {
@@ -872,11 +916,17 @@ func buildCreateAddressRequest(c *customer.Customer) *paddlesdk.CreateAddressReq
 func (s *PaddleSyncService) ProcessCustomerCreatedWebhook(ctx context.Context, paddleCustomer *paddlenotification.CustomerNotification, customerService interfaces.CustomerService) error {
 	paddleCustomerID := paddleCustomer.ID
 
+	conn, err := s.client.GetConnection(ctx)
+	if err != nil {
+		return err
+	}
+
 	// Idempotency: check if mapping already exists
 	filter := &types.EntityIntegrationMappingFilter{
 		ProviderTypes:     []string{string(types.SecretProviderPaddle)},
 		ProviderEntityIDs: []string{paddleCustomerID},
 		EntityType:        types.IntegrationEntityTypeCustomer,
+		ConnectionID:      conn.ID,
 	}
 	resp, err := s.mappingService.GetEntityIntegrationMappings(ctx, filter)
 	if err != nil {
@@ -909,6 +959,7 @@ func (s *PaddleSyncService) ProcessCustomerCreatedWebhook(ctx context.Context, p
 					MetaKeyPaddleCustomerEmail: paddleCustomer.Email,
 					MetaKeySyncedAt:            time.Now().UTC().Format(time.RFC3339),
 				},
+				ConnectionID: lo.ToPtr(conn.ID),
 			})
 			if err != nil {
 				s.logger.Info(ctx, "failed to create mapping for existing customer",
@@ -954,6 +1005,7 @@ func (s *PaddleSyncService) ProcessCustomerCreatedWebhook(ctx context.Context, p
 			MetaKeyPaddleCustomerEmail: paddleCustomer.Email,
 			MetaKeySyncedAt:            time.Now().UTC().Format(time.RFC3339),
 		},
+		ConnectionID: lo.ToPtr(conn.ID),
 	})
 	if err != nil {
 		s.logger.Info(ctx, "failed to create mapping for new customer",
@@ -972,12 +1024,18 @@ func (s *PaddleSyncService) ProcessAddressCreatedWebhook(
 	addr *paddlenotification.AddressNotification,
 	customerService interfaces.CustomerService,
 ) error {
+	conn, err := s.client.GetConnection(ctx)
+	if err != nil {
+		return err
+	}
+
 	// Look up FlexPrice customer by Paddle customer ID.
 	filter := &types.EntityIntegrationMappingFilter{
 		ProviderTypes:     []string{string(types.SecretProviderPaddle)},
 		ProviderEntityIDs: []string{paddleCustomerID},
 		EntityType:        types.IntegrationEntityTypeCustomer,
 		QueryFilter:       types.NewDefaultQueryFilter(),
+		ConnectionID:      conn.ID,
 	}
 	resp, err := s.mappingService.GetEntityIntegrationMappings(ctx, filter)
 	if err != nil {
@@ -1092,6 +1150,11 @@ func (s *PaddleSyncService) ProcessSubscriptionActivatedWebhook(
 		return fmt.Errorf("checking existing subscription mapping: %w", err)
 	}
 	if !activated {
+		conn, err := s.client.GetConnection(ctx)
+		if err != nil {
+			return err
+		}
+
 		_, err = s.mappingService.CreateEntityIntegrationMapping(ctx, apidto.CreateEntityIntegrationMappingRequest{
 			EntityID:         flexSubID,
 			EntityType:       types.IntegrationEntityTypeSubscription,
@@ -1101,6 +1164,7 @@ func (s *PaddleSyncService) ProcessSubscriptionActivatedWebhook(
 				MetaKeyPaddleSubscriptionID: paddleSubID,
 				MetaKeySyncedAt:             time.Now().UTC().Format(time.RFC3339),
 			},
+			ConnectionID: lo.ToPtr(conn.ID),
 		})
 		if err != nil {
 			return fmt.Errorf("creating subscription mapping: %w", err)

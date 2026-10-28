@@ -394,12 +394,18 @@ func (h *Handler) handlePaymentLinkPaid(ctx context.Context, event *RazorpayWebh
 		return nil
 	}
 
+	conn, err := h.client.GetConnection(ctx)
+	if err != nil {
+		return err
+	}
+
 	mappings, err := services.EntityIntegrationMappingService.GetEntityIntegrationMappings(
 		ctx,
 		&types.EntityIntegrationMappingFilter{
 			ProviderEntityIDs: []string{paymentLinkID},
 			ProviderTypes:     []string{string(types.CheckoutPaymentProviderRazorpay)},
 			EntityType:        types.IntegrationEntityTypePayment,
+			ConnectionID:      conn.ID,
 		},
 	)
 	if err != nil {
@@ -426,12 +432,18 @@ func (h *Handler) handlePaymentLinkFailed(ctx context.Context, event *RazorpayWe
 		return nil
 	}
 
+	conn, err := h.client.GetConnection(ctx)
+	if err != nil {
+		return err
+	}
+
 	mappings, err := services.EntityIntegrationMappingService.GetEntityIntegrationMappings(
 		ctx,
 		&types.EntityIntegrationMappingFilter{
 			ProviderEntityIDs: []string{paymentLinkID},
 			ProviderTypes:     []string{string(types.CheckoutPaymentProviderRazorpay)},
 			EntityType:        types.IntegrationEntityTypePayment,
+			ConnectionID:      conn.ID,
 		},
 	)
 	if err != nil {
