@@ -11,6 +11,7 @@ import (
 	"github.com/flexprice/flexprice/internal/domain/entityintegrationmapping"
 	"github.com/flexprice/flexprice/internal/integration/payments"
 	"github.com/flexprice/flexprice/internal/integration/razorpay"
+	"github.com/flexprice/flexprice/internal/integration/webhookscope"
 	"github.com/flexprice/flexprice/internal/interfaces"
 	"github.com/flexprice/flexprice/internal/logger"
 	"github.com/flexprice/flexprice/internal/types"
@@ -145,6 +146,10 @@ func (h *Handler) handlePaymentCaptured(ctx context.Context, event *RazorpayWebh
 	h.logger.Info(ctx, "processing FlexPrice payment capture",
 		"razorpay_payment_id", payment.ID,
 		"flexprice_payment_id", flexpricePaymentID)
+
+	if !webhookscope.Payment(ctx, services.BillingEntityScope, services.PaymentService, services.InvoiceService, h.logger, flexpricePaymentID) {
+		return nil
+	}
 
 	// Get payment record
 	paymentRecord, err := services.PaymentService.GetPayment(ctx, flexpricePaymentID)
@@ -282,6 +287,10 @@ func (h *Handler) handlePaymentFailed(ctx context.Context, event *RazorpayWebhoo
 	h.logger.Info(ctx, "processing FlexPrice payment failure",
 		"razorpay_payment_id", payment.ID,
 		"flexprice_payment_id", flexpricePaymentID)
+
+	if !webhookscope.Payment(ctx, services.BillingEntityScope, services.PaymentService, services.InvoiceService, h.logger, flexpricePaymentID) {
+		return nil
+	}
 
 	// Get payment record
 	paymentRecord, err := services.PaymentService.GetPayment(ctx, flexpricePaymentID)
