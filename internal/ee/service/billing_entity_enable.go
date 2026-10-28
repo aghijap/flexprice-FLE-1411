@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/flexprice/flexprice/internal/domain/billingentity"
+	"github.com/flexprice/flexprice/internal/domain/connection"
 	ierr "github.com/flexprice/flexprice/internal/errors"
 	"github.com/flexprice/flexprice/internal/postgres"
 	"github.com/flexprice/flexprice/internal/temporal/models"
@@ -71,7 +72,11 @@ func (s *billingEntityService) PrepareEnable(ctx context.Context) error {
 		if err := s.rejectExternalTaxEngine(txCtx); err != nil {
 			return err
 		}
-		if _, err := s.GetOrCreateDefault(txCtx); err != nil {
+		def, err := s.GetOrCreateDefault(txCtx)
+		if err != nil {
+			return err
+		}
+		if err := s.assignConnectionsToEntity(txCtx, def.ID); err != nil {
 			return err
 		}
 
@@ -82,6 +87,24 @@ func (s *billingEntityService) PrepareEnable(ctx context.Context) error {
 		s.Logger.Info(txCtx, "billing entities enabling", "tenant_id", types.GetTenantID(txCtx), "environment_id", environmentID)
 		return nil
 	})
+}
+
+// assignConnectionsToEntity gives the entity every published non-storage connection of the environment that has no owner.
+func (s *billingEntityService) assignConnectionsToEntity(ctx context.Context, entityID string) error {
+	conns, err := s.ConnectionRepo.List(ctx, types.NewNoLimitConnectionFilter())
+	if err != nil {
+		return err
+	}
+	for _, conn := range conns {
+		if connection.IsStorageProvider(conn.ProviderType) || conn.BillingEntityID != nil {
+			continue
+		}
+		conn.BillingEntityID = &entityID
+		if err := createConnectionOwnerAssociation(ctx, s.ConnectionAssociationRepo, conn); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *billingEntityService) AssignCustomerBatch(ctx context.Context, limit int) (int, error) {

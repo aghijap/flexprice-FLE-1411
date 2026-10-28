@@ -84,16 +84,17 @@ func (h *OAuthHandler) InitiateOAuth(c *gin.Context) {
 
 	// Create OAuth session
 	session := &types.OAuthSession{
-		SessionID:     sessionID,
-		Provider:      provider,
-		TenantID:      tenantID,
-		EnvironmentID: environmentID,
-		Name:          req.Name,
-		Credentials:   req.Credentials, // Will be encrypted by service
-		Metadata:      req.Metadata,
-		SyncConfig:    req.SyncConfig, // Pass through the sync configuration
-		CSRFState:     csrfState,
-		ExpiresAt:     time.Now().UTC().Add(service.OAuthSessionTTL),
+		SessionID:       sessionID,
+		Provider:        provider,
+		TenantID:        tenantID,
+		EnvironmentID:   environmentID,
+		Name:            req.Name,
+		Credentials:     req.Credentials, // Will be encrypted by service
+		Metadata:        req.Metadata,
+		SyncConfig:      req.SyncConfig, // Pass through the sync configuration
+		BillingEntityID: req.BillingEntityID,
+		CSRFState:       csrfState,
+		ExpiresAt:       time.Now().UTC().Add(service.OAuthSessionTTL),
 	}
 
 	// Store session in cache (credentials will be encrypted)
