@@ -6,6 +6,7 @@ import (
 
 	"github.com/flexprice/flexprice/internal/api/dto"
 	"github.com/flexprice/flexprice/internal/domain/invoice"
+	"github.com/flexprice/flexprice/internal/domain/payment"
 	"github.com/flexprice/flexprice/internal/domain/subscription"
 	"github.com/flexprice/flexprice/internal/domain/wallet"
 	"github.com/flexprice/flexprice/internal/postgres"
@@ -13,14 +14,19 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// BillingEntityGuard tells whether a record's customer may use the environment's integrations:
-// only customers without a billing entity, or of the default entity, may.
-type BillingEntityGuard interface {
-	CustomerServesIntegrations(ctx context.Context, customerID string) (bool, error)
-	InvoiceServesIntegrations(ctx context.Context, invoiceID string) (bool, error)
-	SubscriptionServesIntegrations(ctx context.Context, subscriptionID string) (bool, error)
-	// RequireCustomerIntegrations returns a validation error when the customer's entity has no integrations.
-	RequireCustomerIntegrations(ctx context.Context, customerID string) error
+// BillingEntityScope puts a record's billing entity in ctx so connection lookups find only that entity's connections.
+// Off tenants get ctx unchanged.
+type BillingEntityScope interface {
+	ScopeToCustomer(ctx context.Context, customerID string) (context.Context, error)
+	ScopeToInvoice(ctx context.Context, invoiceID string) (context.Context, error)
+	ScopeToSubscription(ctx context.Context, subscriptionID string) (context.Context, error)
+	ScopeToDefault(ctx context.Context) (context.Context, error)
+	// ScopeToPayment pins the connection that took the payment, else its customer's entity; publishedOnly rejects a removed connection.
+	ScopeToPayment(ctx context.Context, p *payment.Payment, publishedOnly bool) (context.Context, error)
+	// InScope reports whether the customer belongs to the entity in ctx; true when off or ctx has no entity.
+	InScope(ctx context.Context, customerID string) (bool, error)
+	// RequireProviderConnected returns a validation error when the entity in ctx has no connection for the provider.
+	RequireProviderConnected(ctx context.Context, provider types.SecretProvider) error
 }
 
 // CustomerService defines the interface for customer operations
@@ -31,6 +37,8 @@ type CustomerService interface {
 	UpdateCustomer(ctx context.Context, id string, req dto.UpdateCustomerRequest) (*dto.CustomerResponse, error)
 	DeleteCustomer(ctx context.Context, id string) error
 	GetCustomerByLookupKey(ctx context.Context, lookupKey string) (*dto.CustomerResponse, error)
+	SetPreferredConnection(ctx context.Context, customerID, connectionID string) (*dto.CustomerResponse, error)
+	ClearPreferredConnection(ctx context.Context, customerID string) (*dto.CustomerResponse, error)
 
 	// Credit grant applications
 	GetUpcomingCreditGrantApplications(ctx context.Context, customerID string) (*dto.ListCreditGrantApplicationsResponse, error)
@@ -337,6 +345,7 @@ type ServiceDependencies struct {
 	CreditAdjustmentService         CreditAdjustmentService
 	CheckoutSessionService          CheckoutSessionService
 	RefundService                   RefundService
+	BillingEntityScope              BillingEntityScope
 	DB                              postgres.IClient
 }
 

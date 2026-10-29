@@ -71,6 +71,7 @@ func (r *paymentRepository) Create(ctx context.Context, p *domainPayment.Payment
 							SetPaymentMethodID(p.PaymentMethodID).
 							SetNillablePaymentGateway(p.PaymentGateway).
 							SetNillableGatewayPaymentID(p.GatewayPaymentID).
+							SetNillableConnectionID(p.ConnectionID).
 							SetNillableGatewayTrackingID(p.GatewayTrackingID).
 							SetGatewayMetadata(p.GatewayMetadata).
 							SetAmount(p.Amount).
@@ -329,7 +330,7 @@ func (r *paymentRepository) update(ctx context.Context, p *domainPayment.Payment
 		predicates = append(predicates, payment.PaymentStatus(string(*expectedStatus)))
 	}
 
-	affected, err := client.Payment.Update().
+	update := client.Payment.Update().
 		Where(predicates...).
 		SetPaymentStatus(string(p.PaymentStatus)).
 		SetPaymentMethodID(p.PaymentMethodID).
@@ -346,8 +347,14 @@ func (r *paymentRepository) update(ctx context.Context, p *domainPayment.Payment
 		SetNillableFailedAt(p.FailedAt).
 		SetNillableRefundedAt(p.RefundedAt).
 		SetNillableVoidedAt(p.VoidedAt).
-		SetNillableErrorMessage(p.ErrorMessage).
-		SaveReturning(ctx)
+		SetNillableErrorMessage(p.ErrorMessage)
+	if p.ConnectionID != nil {
+		update.SetConnectionID(*p.ConnectionID)
+	} else {
+		update.ClearConnectionID()
+	}
+
+	affected, err := update.SaveReturning(ctx)
 
 	if err != nil {
 		SetSpanError(span, err)

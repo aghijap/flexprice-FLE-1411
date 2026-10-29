@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/flexprice/flexprice/internal/domain/entityintegrationmapping"
+	"github.com/flexprice/flexprice/internal/integration/webhookscope"
 	whop "github.com/flexprice/flexprice/internal/integration/whop"
 	"github.com/flexprice/flexprice/internal/interfaces"
 	"github.com/flexprice/flexprice/internal/logger"
@@ -106,11 +107,17 @@ func (h *Handler) HandleWebhookEvent(ctx context.Context, event *WhopWebhookEven
 func (h *Handler) handleInvoicePaid(ctx context.Context, data *WhopInvoiceData, services *ServiceDependencies) error {
 	h.logger.Info(ctx, "handling Whop invoice.paid", "whop_invoice_id", data.ID)
 
+	conn, err := h.client.GetConnection(ctx)
+	if err != nil {
+		return err
+	}
+
 	// Look up Flexprice invoice via entity_integration_mapping
 	filter := &types.EntityIntegrationMappingFilter{
 		ProviderTypes:     []string{string(types.SecretProviderWhop)},
 		ProviderEntityIDs: []string{data.ID},
 		EntityType:        types.IntegrationEntityTypeInvoice,
+		ConnectionID:      conn.ID,
 	}
 	mappings, err := h.entityIntegrationMappingRepo.List(ctx, filter)
 	if err != nil {
@@ -159,7 +166,7 @@ func (h *Handler) handleInvoicePaid(ctx context.Context, data *WhopInvoiceData, 
 //  2. GET /v1/plans/:plan_id → internal_notes holds the Flexprice customer_id
 //  3. Idempotency check — skip if mapping already exists
 //  4. Create entity mapping: customer_id → member_id
-func (h *Handler) handlePaymentSucceeded(ctx context.Context, data *paymentSucceededEventData, _ *ServiceDependencies) error {
+func (h *Handler) handlePaymentSucceeded(ctx context.Context, data *paymentSucceededEventData, services *ServiceDependencies) error {
 	h.logger.Info(ctx, "handling Whop payment.succeeded",
 		"payment_id", data.ID,
 		"plan_id", data.Plan.ID)
@@ -186,6 +193,21 @@ func (h *Handler) handlePaymentSucceeded(ctx context.Context, data *paymentSucce
 			"plan_id", data.Plan.ID)
 		return nil
 	}
+	inScope, err := webhookscope.Customer(ctx, services.BillingEntityScope, h.logger, customerID)
+	if err != nil {
+		h.logger.Error(ctx, "failed to read the billing entity of the plan's customer, skipping event",
+			"error", err,
+			"customer_id", customerID)
+		return nil
+	}
+	if !inScope {
+		return nil
+	}
+
+	conn, err := h.client.GetConnection(ctx)
+	if err != nil {
+		return err
+	}
 
 	// Idempotency: skip if mapping already exists
 	existingFilter := &types.EntityIntegrationMappingFilter{
@@ -196,6 +218,7 @@ func (h *Handler) handlePaymentSucceeded(ctx context.Context, data *paymentSucce
 		EntityIDs:     []string{customerID},
 		EntityType:    types.IntegrationEntityTypeCustomer,
 		ProviderTypes: []string{string(types.SecretProviderWhop)},
+		ConnectionID:  conn.ID,
 	}
 	existing, err := h.entityIntegrationMappingRepo.List(ctx, existingFilter)
 	if err != nil {

@@ -184,6 +184,7 @@ func main() {
 			repository.NewCreditNoteRepository,
 			repository.NewCreditNoteLineItemRepository,
 			repository.NewConnectionRepository,
+			repository.NewConnectionAssociationRepository,
 			repository.NewEntityIntegrationMappingRepository,
 			repository.NewUsageRecordRepository,
 			repository.NewTaxRateRepository,
@@ -318,7 +319,7 @@ func main() {
 			service.NewTaxService,
 			service.NewFXRateService,
 			service.NewBillingEntityService,
-			provideBillingEntityGuard,
+			provideBillingEntityScope,
 			service.NewHostedInvoiceTokenService,
 			service.NewHostedInvoiceService,
 			service.NewCouponService,
@@ -489,7 +490,7 @@ func provideHandlers(
 		UsageRecord:              v1.NewUsageRecordHandler(usageRecordService, logger),
 		Integration:              v1.NewIntegrationHandler(integrationSyncService, entityIntegrationMappingService, connectionService, logger),
 		Paddle:                   v1.NewPaddleHandler(integrationFactory, logger),
-		Webhook:                  v1.NewWebhookHandler(cfg, svixClient, logger, integrationFactory, customerService, paymentService, invoiceService, planService, subscriptionService, entityIntegrationMappingService, checkoutSessionService, refundService, db, webhookService),
+		Webhook:                  v1.NewWebhookHandler(cfg, svixClient, logger, integrationFactory, customerService, paymentService, invoiceService, planService, subscriptionService, entityIntegrationMappingService, checkoutSessionService, refundService, db, webhookService, billingEntityService),
 		Coupon:                   v1.NewCouponHandler(couponService, couponAssociationService, logger),
 		Addon:                    v1.NewAddonHandler(addonService, entitlementService, temporalService, logger),
 		Commitment:               v1.NewCommitmentHandler(commitmentService, logger),
@@ -895,6 +896,6 @@ func enrichServiceParams(base service.ServiceParams, revenueFacts interfaces.Rev
 	return base
 }
 
-func provideBillingEntityGuard(s service.BillingEntityService) interfaces.BillingEntityGuard {
+func provideBillingEntityScope(s service.BillingEntityService) interfaces.BillingEntityScope {
 	return s
 }

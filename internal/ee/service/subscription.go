@@ -22,6 +22,7 @@ import (
 	"github.com/flexprice/flexprice/internal/domain/proration"
 	"github.com/flexprice/flexprice/internal/domain/subscription"
 	ierr "github.com/flexprice/flexprice/internal/errors"
+	"github.com/flexprice/flexprice/internal/integration"
 	paddleint "github.com/flexprice/flexprice/internal/integration/paddle"
 	"github.com/flexprice/flexprice/internal/temporal/models"
 	invoiceTemporalModels "github.com/flexprice/flexprice/internal/temporal/models/invoice"
@@ -172,7 +173,9 @@ func (s *subscriptionService) createSubscription(ctx context.Context, req dto.Cr
 	if sub.Timezone == "" {
 		sub.Timezone = types.DefaultTimezone
 	}
-	s.overRideSubscriptionBasedOnIntegration(ctx, sub, &req)
+	if err := s.overRideSubscriptionBasedOnIntegration(ctx, sub, &req); err != nil {
+		return nil, err
+	}
 
 	// Validate and filter prices
 	validPrices, err := s.ValidateAndFilterPricesForSubscription(ctx, plan.ID, types.PRICE_ENTITY_TYPE_PLAN, sub, req.Workflow, req.IncludePriceIDs)
@@ -725,11 +728,16 @@ func (s *subscriptionService) CreateSubscription(ctx context.Context, req dto.Cr
 	return response, nil
 }
 
-func (s *subscriptionService) overRideSubscriptionBasedOnIntegration(ctx context.Context, sub *subscription.Subscription, req *dto.CreateSubscriptionRequest) {
+func (s *subscriptionService) overRideSubscriptionBasedOnIntegration(ctx context.Context, sub *subscription.Subscription, req *dto.CreateSubscriptionRequest) error {
+	ctx, err := NewBillingEntityService(s.ServiceParams).ScopeToCustomer(ctx, sub.CustomerID)
+	if err != nil {
+		return err
+	}
 	paddleInt, _ := s.IntegrationFactory.GetPaddleIntegration(ctx)
 	if paddleInt != nil {
 		overRideSubscriptionBasedOnPaddleIntegration(sub, req)
 	}
+	return nil
 }
 
 func overRideSubscriptionBasedOnPaddleIntegration(sub *subscription.Subscription, req *dto.CreateSubscriptionRequest) {
@@ -952,6 +960,12 @@ func triggerHubSpotDealSync(ctx context.Context, sp ServiceParams, subscriptionI
 		return
 	}
 
+	ctx, err := NewBillingEntityService(sp).ScopeToSubscription(ctx, subscriptionID)
+	if err != nil {
+		sp.Logger.Error(ctx, "failed to resolve billing entity for HubSpot deal sync", "error", err, "subscription_id", subscriptionID)
+		return
+	}
+
 	conn, err := sp.ConnectionRepo.GetByProvider(ctx, types.SecretProviderHubSpot)
 	if err != nil || conn == nil {
 		sp.Logger.Debug(ctx, "HubSpot connection not found, skipping deal sync",
@@ -988,12 +1002,6 @@ func triggerHubSpotDealSync(ctx context.Context, sp ServiceParams, subscriptionI
 		sp.Logger.Debug(ctx, "customer has no HubSpot deal ID, skipping deal sync",
 			"customer_id", cust.ID,
 			"subscription_id", subscriptionID)
-		return
-	}
-	if skip, err := skipIntegrationsForCustomer(ctx, sp, cust.ID, "hubspot_deal_sync"); err != nil || skip {
-		if err != nil {
-			sp.Logger.Error(ctx, "failed to check billing entity for HubSpot deal sync", "error", err, "subscription_id", subscriptionID)
-		}
 		return
 	}
 
@@ -1054,6 +1062,12 @@ func (s *subscriptionService) triggerHubSpotQuoteSyncWorkflow(ctx context.Contex
 		return
 	}
 
+	ctx, err := NewBillingEntityService(s.ServiceParams).ScopeToCustomer(ctx, customerID)
+	if err != nil {
+		s.Logger.Error(ctx, "failed to resolve billing entity for HubSpot quote sync", "error", err, "subscription_id", subscriptionID)
+		return
+	}
+
 	conn, err := s.ConnectionRepo.GetByProvider(ctx, types.SecretProviderHubSpot)
 	if err != nil || conn == nil {
 		s.Logger.Debug(ctx, "HubSpot connection not found, skipping quote sync",
@@ -1088,12 +1102,6 @@ func (s *subscriptionService) triggerHubSpotQuoteSyncWorkflow(ctx context.Contex
 			"customer_id", customerID,
 			"subscription_id", subscriptionID)
 		return // Not an error - customer might not be from HubSpot
-	}
-	if skip, err := skipIntegrationsForCustomer(ctx, s.ServiceParams, customerID, "hubspot_quote_sync"); err != nil || skip {
-		if err != nil {
-			s.Logger.Error(ctx, "failed to check billing entity for HubSpot quote sync", "error", err, "subscription_id", subscriptionID)
-		}
-		return
 	}
 
 	// Prepare workflow input with all necessary IDs
@@ -6051,14 +6059,8 @@ func (s *subscriptionService) ProcessAutoCancellationSubscriptions(ctx context.C
 		canceledCount := 0
 		failedCount := 0
 
-		stripeIntegration, err := s.IntegrationFactory.GetStripeIntegration(tenantCtx)
-		if err != nil {
-			s.Logger.Error(ctx, "failed to get Stripe integration for auto-cancellation",
-				"error", err,
-				"tenant_id", tenantConfig.TenantID,
-				"environment_id", tenantConfig.EnvironmentID)
-			continue
-		}
+		// Keyed by billing entity; nil when that entity has no Stripe integration.
+		stripeByEntity := make(map[string]*integration.StripeIntegration)
 		invoiceService := NewInvoiceService(s.ServiceParams)
 
 		// Void on Stripe, cancel, then void in Flexprice so a failed cancel retries next tick.
@@ -6073,9 +6075,34 @@ func (s *subscriptionService) ProcessAutoCancellationSubscriptions(ctx context.C
 				continue
 			}
 
+			subCtx, err := NewBillingEntityService(s.ServiceParams).ScopeToSubscription(tenantCtx, sub.ID)
+			if err != nil {
+				s.Logger.Error(ctx, "failed to resolve billing entity for auto-cancellation",
+					"error", err,
+					"subscription_id", sub.ID)
+				continue
+			}
+			entityID := types.GetBillingEntityID(subCtx)
+			stripeIntegration, seen := stripeByEntity[entityID]
+			if !seen {
+				stripeIntegration, err = s.IntegrationFactory.GetStripeIntegration(subCtx)
+				if err != nil {
+					s.Logger.Error(ctx, "failed to get Stripe integration for auto-cancellation",
+						"error", err,
+						"tenant_id", tenantConfig.TenantID,
+						"environment_id", tenantConfig.EnvironmentID,
+						"billing_entity_id", entityID)
+					stripeIntegration = nil
+				}
+				stripeByEntity[entityID] = stripeIntegration
+			}
+			if stripeIntegration == nil {
+				continue
+			}
+
 			voidedInStripe := true
 			for _, inv := range overdueInvoices {
-				ok, err := stripeIntegration.InvoiceSyncSvc.VoidInvoiceInStripe(tenantCtx, inv.ID)
+				ok, err := stripeIntegration.InvoiceSyncSvc.VoidInvoiceInStripe(subCtx, inv.ID)
 				if err != nil {
 					s.Logger.Error(ctx, "failed to void overdue invoice in Stripe, retrying next run",
 						"error", err,
@@ -8584,6 +8611,13 @@ func (s *subscriptionService) processAutoInvoiceThresholdSubscription(
 // available in the create response. Errors are soft-fail — subscription is already persisted.
 func (s *subscriptionService) runPaddleSubscriptionSync(ctx context.Context, sub *subscription.Subscription) {
 	if s.IntegrationFactory == nil {
+		return
+	}
+	ctx, err := NewBillingEntityService(s.ServiceParams).ScopeToSubscription(ctx, sub.ID)
+	if err != nil {
+		s.Logger.Error(ctx, "failed to resolve billing entity for paddle inline sync, subscription created without checkout URL",
+			"error", err,
+			"subscription_id", sub.ID)
 		return
 	}
 	paddleInt, err := s.IntegrationFactory.GetPaddleIntegration(ctx)

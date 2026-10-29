@@ -42,17 +42,17 @@ func (s *integrationSyncService) SyncEntity(ctx context.Context, req dto.Integra
 }
 
 func (s *integrationSyncService) pullInvoice(ctx context.Context, invoiceID string) error {
-	connections, err := s.ConnectionRepo.List(ctx, &types.ConnectionFilter{
-		QueryFilter: types.NewNoLimitQueryFilter(),
-	})
+	ctx, err := NewBillingEntityService(s.ServiceParams).ScopeToInvoice(ctx, invoiceID)
+	if err != nil {
+		return err
+	}
+
+	connections, err := s.ConnectionRepo.ListPublishedInScope(ctx)
 	if err != nil {
 		return err
 	}
 
 	for _, conn := range connections {
-		if conn.Status != types.StatusPublished {
-			continue
-		}
 		integ, err := s.IntegrationFactory.GetIntegrationByProvider(ctx, conn.ProviderType)
 		if err != nil {
 			continue
@@ -76,7 +76,8 @@ func (s *integrationSyncService) syncInvoice(ctx context.Context, invoiceID stri
 			Mark(ierr.ErrValidation)
 	}
 
-	if err := requireIntegrationsForCustomer(ctx, s.ServiceParams, inv.CustomerID); err != nil {
+	ctx, err = NewBillingEntityService(s.ServiceParams).ScopeToCustomer(ctx, inv.CustomerID)
+	if err != nil {
 		return err
 	}
 
@@ -100,7 +101,8 @@ func (s *integrationSyncService) syncCustomer(ctx context.Context, customerID st
 	if _, err := s.CustomerRepo.Get(ctx, customerID); err != nil {
 		return err
 	}
-	if err := requireIntegrationsForCustomer(ctx, s.ServiceParams, customerID); err != nil {
+	ctx, err := NewBillingEntityService(s.ServiceParams).ScopeToCustomer(ctx, customerID)
+	if err != nil {
 		return err
 	}
 

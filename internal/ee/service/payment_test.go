@@ -62,6 +62,7 @@ func (s *PaymentServiceSuite) setupService() {
 		AuthRepo:            s.GetStores().AuthRepo,
 		WalletRepo:          s.GetStores().WalletRepo,
 		PaymentRepo:         s.GetStores().PaymentRepo,
+		ConnectionRepo:      s.GetStores().ConnectionRepo,
 		EventPublisher:      s.GetPublisher(),
 		WebhookPublisher:    s.GetWebhookPublisher(),
 	})
@@ -802,6 +803,8 @@ func (s *PaymentServiceSuite) TestProcessPaymentCountsOutcome() {
 		PaymentRepo:      s.GetStores().PaymentRepo,
 		InvoiceRepo:      s.GetStores().InvoiceRepo,
 		CustomerRepo:     s.GetStores().CustomerRepo,
+		TenantRepo:       s.GetStores().TenantRepo,
+		EnvironmentRepo:  s.GetStores().EnvironmentRepo,
 		EventPublisher:   s.GetPublisher(),
 		WebhookPublisher: s.GetWebhookPublisher(),
 	})

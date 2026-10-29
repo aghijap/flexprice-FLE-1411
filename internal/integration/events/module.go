@@ -40,7 +40,7 @@ func provideIntegrationPubSub(
 func provideIntegrationHandler(
 	connectionRepo connection.Repository,
 	eimRepo entityintegrationmapping.Repository,
-	entityGuard interfaces.BillingEntityGuard,
+	entityScope interfaces.BillingEntityScope,
 	ps types.IntegrationEventsPubSub,
 	cfg *config.Configuration,
 	log *logger.Logger,
@@ -48,7 +48,7 @@ func provideIntegrationHandler(
 	return NewHandler(Deps{
 		ConnectionRepo: connectionRepo,
 		EIMRepo:        eimRepo,
-		EntityGuard:    entityGuard,
+		EntityScope:    entityScope,
 		Logger:         log,
 		Config:         cfg,
 		PubSub:         ps.PubSub,

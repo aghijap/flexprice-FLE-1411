@@ -13,6 +13,7 @@ import (
 	"github.com/flexprice/flexprice/internal/api/dto"
 	domainconn "github.com/flexprice/flexprice/internal/domain/connection"
 	ierr "github.com/flexprice/flexprice/internal/errors"
+	"github.com/flexprice/flexprice/internal/integration/webhookscope"
 	"github.com/flexprice/flexprice/internal/integration/zoho"
 	"github.com/flexprice/flexprice/internal/interfaces"
 	"github.com/flexprice/flexprice/internal/logger"
@@ -91,7 +92,7 @@ func (h *Handler) Handle(ctx context.Context, conn *domainconn.Connection, parse
 	switch {
 	case p.Invoice != nil:
 		metricEventType = "invoice"
-		return h.handleInvoice(ctx, p.Invoice, deps)
+		return h.handleInvoice(ctx, conn, p.Invoice, deps)
 	case p.Contact != nil:
 		metricEventType = "contact"
 		return h.handleContact(ctx, conn, p.Contact, deps)
@@ -102,7 +103,7 @@ func (h *Handler) Handle(ctx context.Context, conn *domainconn.Connection, parse
 	}
 }
 
-func (h *Handler) handleInvoice(ctx context.Context, inv *InvoicePayload, deps *ServiceDeps) error {
+func (h *Handler) handleInvoice(ctx context.Context, conn *domainconn.Connection, inv *InvoicePayload, deps *ServiceDeps) error {
 	if inv == nil || inv.InvoiceID.String() == "" {
 		return nil
 	}
@@ -110,16 +111,16 @@ func (h *Handler) handleInvoice(ctx context.Context, inv *InvoicePayload, deps *
 	st := strings.TrimSpace(inv.Status)
 	switch {
 	case zohoWebhookInvoiceStatusVoid(st):
-		return h.handleInvoiceVoided(ctx, zohoInvID, deps)
+		return h.handleInvoiceVoided(ctx, conn, zohoInvID, deps)
 	case strings.EqualFold(st, zoho.InvoiceStatusPaid):
-		return h.handleInvoicePaid(ctx, zohoInvID, inv, deps)
+		return h.handleInvoicePaid(ctx, conn, zohoInvID, inv, deps)
 	default:
 		return nil
 	}
 }
 
-func (h *Handler) handleInvoiceVoided(ctx context.Context, zohoInvID string, deps *ServiceDeps) error {
-	mapping, err := h.findInvoiceMapping(ctx, zohoInvID, deps)
+func (h *Handler) handleInvoiceVoided(ctx context.Context, conn *domainconn.Connection, zohoInvID string, deps *ServiceDeps) error {
+	mapping, err := h.findInvoiceMapping(ctx, conn, zohoInvID, deps)
 	if err != nil || mapping == nil {
 		h.logger.Debug(ctx, "zoho webhook: no FlexPrice invoice mapping for void",
 			"zoho_invoice_id", zohoInvID,
@@ -161,8 +162,8 @@ func (h *Handler) handleInvoiceVoided(ctx context.Context, zohoInvID string, dep
 	return nil
 }
 
-func (h *Handler) handleInvoicePaid(ctx context.Context, zohoInvID string, inv *InvoicePayload, deps *ServiceDeps) error {
-	mapping, err := h.findInvoiceMapping(ctx, zohoInvID, deps)
+func (h *Handler) handleInvoicePaid(ctx context.Context, conn *domainconn.Connection, zohoInvID string, inv *InvoicePayload, deps *ServiceDeps) error {
+	mapping, err := h.findInvoiceMapping(ctx, conn, zohoInvID, deps)
 	if err != nil || mapping == nil {
 		h.logger.Debug(ctx, "zoho webhook: no FlexPrice invoice mapping",
 			"zoho_invoice_id", zohoInvID,
@@ -263,7 +264,7 @@ func (h *Handler) handleContact(ctx context.Context, conn *domainconn.Connection
 		return nil
 	}
 
-	existing, err := h.findCustomerMapping(ctx, c.ContactID, deps)
+	existing, err := h.findCustomerMapping(ctx, conn, c.ContactID, deps)
 	if err != nil {
 		return err
 	}
@@ -281,13 +282,11 @@ func (h *Handler) handleContact(ctx context.Context, conn *domainconn.Connection
 		return nil
 	}
 
-	custFilter := types.NewNoLimitCustomerFilter()
-	custFilter.Email = email
-	custList, err := deps.CustomerService.GetCustomers(ctx, custFilter)
+	match, err := webhookscope.CustomerByEmail(ctx, deps.CustomerService, email)
 	if err != nil {
 		return err
 	}
-	if custList != nil && len(custList.Items) > 0 {
+	if match != nil {
 		h.logger.Debug(ctx, "zoho webhook: FlexPrice customer with same email exists, skipping create",
 			"email", email,
 			"zoho_contact_id", c.ContactID)
@@ -325,6 +324,7 @@ func (h *Handler) handleContact(ctx context.Context, conn *domainconn.Connection
 		Metadata: map[string]interface{}{
 			"source": "zoho_books_inbound_webhook",
 		},
+		ConnectionID: lo.ToPtr(conn.ID),
 	})
 	if err != nil {
 		h.logger.Error(ctx, "zoho webhook: customer created but mapping failed",
@@ -340,10 +340,11 @@ func (h *Handler) handleContact(ctx context.Context, conn *domainconn.Connection
 	return nil
 }
 
-func (h *Handler) findInvoiceMapping(ctx context.Context, zohoInvoiceID string, deps *ServiceDeps) (*dto.EntityIntegrationMappingResponse, error) {
+func (h *Handler) findInvoiceMapping(ctx context.Context, conn *domainconn.Connection, zohoInvoiceID string, deps *ServiceDeps) (*dto.EntityIntegrationMappingResponse, error) {
 	filter := types.NewEntityIntegrationMappingFilter()
 	filter.ProviderEntityIDs = []string{zohoInvoiceID}
 	filter.ProviderTypes = []string{string(types.SecretProviderZohoBooks)}
+	filter.ConnectionID = conn.ID
 	filter.EntityType = types.IntegrationEntityTypeInvoice
 	list, err := deps.EntityIntegrationMappingService.GetEntityIntegrationMappings(ctx, filter)
 	if err != nil {
@@ -355,10 +356,11 @@ func (h *Handler) findInvoiceMapping(ctx context.Context, zohoInvoiceID string, 
 	return list.Items[0], nil
 }
 
-func (h *Handler) findCustomerMapping(ctx context.Context, zohoContactID string, deps *ServiceDeps) (*dto.EntityIntegrationMappingResponse, error) {
+func (h *Handler) findCustomerMapping(ctx context.Context, conn *domainconn.Connection, zohoContactID string, deps *ServiceDeps) (*dto.EntityIntegrationMappingResponse, error) {
 	filter := types.NewEntityIntegrationMappingFilter()
 	filter.ProviderEntityIDs = []string{zohoContactID}
 	filter.ProviderTypes = []string{string(types.SecretProviderZohoBooks)}
+	filter.ConnectionID = conn.ID
 	filter.EntityType = types.IntegrationEntityTypeCustomer
 	list, err := deps.EntityIntegrationMappingService.GetEntityIntegrationMappings(ctx, filter)
 	if err != nil {

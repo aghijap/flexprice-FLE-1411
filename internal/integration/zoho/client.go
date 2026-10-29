@@ -21,6 +21,7 @@ import (
 
 type ZohoClient interface {
 	HasZohoBooksConnection(ctx context.Context) bool
+	GetConnection(ctx context.Context) (*connection.Connection, error)
 	QueryContactByEmail(ctx context.Context, email string) (*ContactResponse, error)
 	CreateContact(ctx context.Context, req *ContactCreateRequest) (*ContactResponse, error)
 	UpdateContact(ctx context.Context, contactID string, req *ContactUpdateRequest) (*ContactResponse, error)
@@ -72,6 +73,11 @@ func NewClient(
 func (c *Client) HasZohoBooksConnection(ctx context.Context) bool {
 	conn, err := c.connectionRepo.GetByProvider(ctx, types.SecretProviderZohoBooks)
 	return err == nil && conn != nil && conn.Status == types.StatusPublished
+}
+
+// GetConnection returns the Zoho Books connection for the current context.
+func (c *Client) GetConnection(ctx context.Context) (*connection.Connection, error) {
+	return c.connectionRepo.GetByProvider(ctx, types.SecretProviderZohoBooks)
 }
 
 // GetZohoBooksWebhookConfig implements ZohoClient (used by HTTP webhooks, parallel to Stripe GetStripeClient).

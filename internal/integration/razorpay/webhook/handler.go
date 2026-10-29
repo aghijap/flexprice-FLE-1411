@@ -11,6 +11,7 @@ import (
 	"github.com/flexprice/flexprice/internal/domain/entityintegrationmapping"
 	"github.com/flexprice/flexprice/internal/integration/payments"
 	"github.com/flexprice/flexprice/internal/integration/razorpay"
+	"github.com/flexprice/flexprice/internal/integration/webhookscope"
 	"github.com/flexprice/flexprice/internal/interfaces"
 	"github.com/flexprice/flexprice/internal/logger"
 	"github.com/flexprice/flexprice/internal/types"
@@ -145,6 +146,10 @@ func (h *Handler) handlePaymentCaptured(ctx context.Context, event *RazorpayWebh
 	h.logger.Info(ctx, "processing FlexPrice payment capture",
 		"razorpay_payment_id", payment.ID,
 		"flexprice_payment_id", flexpricePaymentID)
+
+	if !h.paymentInScope(ctx, flexpricePaymentID, services) {
+		return nil
+	}
 
 	// Get payment record
 	paymentRecord, err := services.PaymentService.GetPayment(ctx, flexpricePaymentID)
@@ -283,6 +288,10 @@ func (h *Handler) handlePaymentFailed(ctx context.Context, event *RazorpayWebhoo
 		"razorpay_payment_id", payment.ID,
 		"flexprice_payment_id", flexpricePaymentID)
 
+	if !h.paymentInScope(ctx, flexpricePaymentID, services) {
+		return nil
+	}
+
 	// Get payment record
 	paymentRecord, err := services.PaymentService.GetPayment(ctx, flexpricePaymentID)
 	if err != nil {
@@ -394,12 +403,18 @@ func (h *Handler) handlePaymentLinkPaid(ctx context.Context, event *RazorpayWebh
 		return nil
 	}
 
+	conn, err := h.client.GetConnection(ctx)
+	if err != nil {
+		return err
+	}
+
 	mappings, err := services.EntityIntegrationMappingService.GetEntityIntegrationMappings(
 		ctx,
 		&types.EntityIntegrationMappingFilter{
 			ProviderEntityIDs: []string{paymentLinkID},
 			ProviderTypes:     []string{string(types.CheckoutPaymentProviderRazorpay)},
 			EntityType:        types.IntegrationEntityTypePayment,
+			ConnectionID:      conn.ID,
 		},
 	)
 	if err != nil {
@@ -426,12 +441,18 @@ func (h *Handler) handlePaymentLinkFailed(ctx context.Context, event *RazorpayWe
 		return nil
 	}
 
+	conn, err := h.client.GetConnection(ctx)
+	if err != nil {
+		return err
+	}
+
 	mappings, err := services.EntityIntegrationMappingService.GetEntityIntegrationMappings(
 		ctx,
 		&types.EntityIntegrationMappingFilter{
 			ProviderEntityIDs: []string{paymentLinkID},
 			ProviderTypes:     []string{string(types.CheckoutPaymentProviderRazorpay)},
 			EntityType:        types.IntegrationEntityTypePayment,
+			ConnectionID:      conn.ID,
 		},
 	)
 	if err != nil {
@@ -471,6 +492,18 @@ func (h *Handler) handlePaymentLinkFailed(ctx context.Context, event *RazorpayWe
 	}
 
 	return nil
+}
+
+// paymentInScope is false when the payment is another entity's or its entity cannot be read; the event is never retried, as for a failed payment lookup.
+func (h *Handler) paymentInScope(ctx context.Context, paymentID string, services *ServiceDependencies) bool {
+	ok, err := webhookscope.Payment(ctx, services.BillingEntityScope, services.PaymentService, services.InvoiceService, h.logger, paymentID)
+	if err != nil {
+		h.logger.Error(ctx, "failed to read the billing entity of the webhook payment, skipping event",
+			"error", err,
+			"flexprice_payment_id", paymentID)
+		return false
+	}
+	return ok
 }
 
 // handleCheckoutSessionForPayment completes pending checkout sessions and refunds

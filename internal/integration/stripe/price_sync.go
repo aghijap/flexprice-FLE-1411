@@ -57,10 +57,16 @@ func (s *stripePriceSyncService) EnsureBulkProductsSynced(ctx context.Context, i
 
 	rootPriceIDs := lo.Uniq(lo.Map(items, func(item priceSyncItem, _ int) string { return itemToRootPriceIdMap[item.PriceID] }))
 
+	conn, err := s.client.GetConnection(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	existing, err := s.entityIntegrationMappingRepo.List(ctx, &types.EntityIntegrationMappingFilter{
 		EntityIDs:     rootPriceIDs,
 		EntityType:    types.IntegrationEntityTypePrice,
 		ProviderTypes: []string{"stripe"},
+		ConnectionID:  conn.ID,
 		QueryFilter:   types.NewNoLimitQueryFilter(),
 	})
 	if err != nil {
@@ -84,7 +90,7 @@ func (s *stripePriceSyncService) EnsureBulkProductsSynced(ctx context.Context, i
 	}
 
 	// Lazy: only reached when something is unmapped, so the fully-mapped test path needs no Stripe client.
-	stripeClient, _, err := s.client.GetStripeClient(ctx)
+	stripeClient, _, err := s.client.buildStripeClient(conn)
 	if err != nil {
 		return nil, err
 	}
@@ -132,6 +138,7 @@ func (s *stripePriceSyncService) EnsureBulkProductsSynced(ctx context.Context, i
 				"sync_source":    "flexprice",
 			},
 			EnvironmentID: types.GetEnvironmentID(ctx),
+			ConnectionID:  lo.ToPtr(conn.ID),
 			BaseModel:     types.GetDefaultBaseModel(ctx),
 		}
 
@@ -149,6 +156,7 @@ func (s *stripePriceSyncService) EnsureBulkProductsSynced(ctx context.Context, i
 				EntityIDs:     []string{rootID},
 				EntityType:    types.IntegrationEntityTypePrice,
 				ProviderTypes: []string{"stripe"},
+				ConnectionID:  conn.ID,
 				QueryFilter:   types.NewNoLimitQueryFilter(),
 			})
 			if findErr != nil || len(winner) == 0 {

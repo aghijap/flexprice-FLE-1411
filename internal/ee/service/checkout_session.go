@@ -110,7 +110,8 @@ func (s *checkoutSessionService) Create(ctx context.Context, req dto.CreateCheck
 			WithReportableDetails(map[string]any{"customer_id": customer.ID, "status": customer.Status}).
 			Mark(ierr.ErrValidation)
 	}
-	if err := requireIntegrationsForCustomer(ctx, s.ServiceParams, customer.ID); err != nil {
+	ctx, err = s.scopeCheckout(ctx, customer.ID, req.PaymentProvider)
+	if err != nil {
 		return nil, err
 	}
 
@@ -823,6 +824,19 @@ func (s *checkoutSessionService) createCheckoutPayment(ctx context.Context, inv 
 	})
 }
 
+// scopeCheckout puts the customer's billing entity in ctx and rejects a provider that entity has not connected.
+func (s *checkoutSessionService) scopeCheckout(ctx context.Context, customerID string, provider types.CheckoutPaymentProvider) (context.Context, error) {
+	ctx, err := NewBillingEntityService(s.ServiceParams).ScopeToCustomer(ctx, customerID)
+	if err != nil {
+		return ctx, err
+	}
+	gateway, ok := provider.ToPaymentGateway()
+	if !ok {
+		return ctx, nil
+	}
+	return ctx, requireProviderConnected(ctx, s.ServiceParams, types.SecretProvider(gateway))
+}
+
 // releasePayFirstDraft undoes the caller's draft invoice and pending wallet top-up when no session is started.
 func (s *checkoutSessionService) releasePayFirstDraft(ctx context.Context, session *domainCheckout.CheckoutSession, req *dto.PayFirstCheckoutRequest, cause error) {
 	draftInvoiceID := req.DraftInvoice.ID
@@ -875,7 +889,8 @@ func (s *checkoutSessionService) StartPayFirstCheckoutSession(
 	session := req.ToCheckoutSession(ctx, req.CustomerID)
 	session.CheckoutInvoiceID = lo.ToPtr(draftInvoiceID)
 
-	if err := requireIntegrationsForCustomer(ctx, s.ServiceParams, req.CustomerID); err != nil {
+	ctx, err := s.scopeCheckout(ctx, req.CustomerID, session.PaymentProvider)
+	if err != nil {
 		s.releasePayFirstDraft(ctx, session, req, err)
 		return nil, err
 	}

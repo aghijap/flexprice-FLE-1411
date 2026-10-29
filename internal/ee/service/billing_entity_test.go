@@ -6,6 +6,7 @@ import (
 	"github.com/cockroachdb/errors"
 
 	"github.com/flexprice/flexprice/internal/domain/billingentity"
+	"github.com/flexprice/flexprice/internal/domain/connection"
 	"github.com/flexprice/flexprice/internal/domain/customer"
 	"github.com/flexprice/flexprice/internal/domain/environment"
 	"github.com/flexprice/flexprice/internal/domain/subscription"
@@ -70,7 +71,7 @@ func (s *BillingEntityServiceSuite) addEntity(id, environmentID, prefix string, 
 	return e
 }
 
-func (s *BillingEntityServiceSuite) TestResolveForCustomerCreate() {
+func (s *BillingEntityServiceSuite) TestResolveForCreate() {
 	env := types.GetEnvironmentID(s.GetContext())
 
 	tests := []struct {
@@ -99,7 +100,7 @@ func (s *BillingEntityServiceSuite) TestResolveForCustomerCreate() {
 				s.addEntity("be_other", "env_other", "OT", false)
 			}
 
-			got, err := s.service.ResolveForCustomerCreate(s.GetContext(), tc.mode, tc.requested)
+			got, err := s.service.ResolveForCreate(s.GetContext(), tc.mode, tc.requested)
 			if tc.wantErr != nil {
 				s.Require().Error(err)
 				s.True(errors.Is(err, tc.wantErr), "got %v", err)
@@ -147,74 +148,176 @@ func (s *BillingEntityServiceSuite) TestEffectiveEntity() {
 	})
 }
 
-func (s *BillingEntityServiceSuite) TestCustomerServesIntegrations() {
+func (s *BillingEntityServiceSuite) TestScopeToCustomer() {
 	env := types.GetEnvironmentID(s.GetContext())
+
+	s.Run("off", func() {
+		s.ClearStores()
+		s.setMode(types.BillingEntityModeOff)
+
+		// The customer does not exist, so any read would fail.
+		ctx, err := s.service.ScopeToCustomer(s.GetContext(), "c_missing")
+		s.Require().NoError(err)
+		s.Empty(types.GetBillingEntityID(ctx))
+	})
 
 	tests := []struct {
 		name     string
 		mode     types.BillingEntityMode
 		customer *string
-		want     bool
+		want     string
 	}{
-		{name: "off_no_entity", mode: types.BillingEntityModeOff, want: true},
-		{name: "stored_default", mode: types.BillingEntityModeEnabled, customer: lo.ToPtr("be_default"), want: true},
-		{name: "stored_non_default", mode: types.BillingEntityModeEnabled, customer: lo.ToPtr("be_eu"), want: false},
-		{name: "unassigned_while_enabling", mode: types.BillingEntityModeEnabling, want: true},
+		{name: "enabling_unassigned", mode: types.BillingEntityModeEnabling, want: "be_default"},
+		{name: "enabled_assigned", mode: types.BillingEntityModeEnabled, customer: lo.ToPtr("be_eu"), want: "be_eu"},
 	}
 
 	for _, tc := range tests {
 		s.Run(tc.name, func() {
 			s.ClearStores()
 			s.setMode(tc.mode)
-			if tc.mode != types.BillingEntityModeOff {
-				s.addEntity("be_default", env, "INV", true)
-				s.addEntity("be_eu", env, "EU", false)
-			}
+			s.addEntity("be_default", env, "INV", true)
+			s.addEntity("be_eu", env, "EU", false)
 			s.addCustomer("c1", tc.customer)
 
-			got, err := s.service.CustomerServesIntegrations(s.GetContext(), "c1")
+			ctx, err := s.service.ScopeToCustomer(s.GetContext(), "c1")
 			s.Require().NoError(err)
-			s.Equal(tc.want, got)
+			s.Equal(tc.want, types.GetBillingEntityID(ctx))
 		})
 	}
-
-	s.Run("off_missing_record_is_served", func() {
-		s.ClearStores()
-		s.setMode(types.BillingEntityModeOff)
-
-		served, err := s.service.CustomerServesIntegrations(s.GetContext(), "c_missing")
-		s.Require().NoError(err)
-		s.True(served)
-		served, err = s.service.SubscriptionServesIntegrations(s.GetContext(), "sub_missing")
-		s.Require().NoError(err)
-		s.True(served)
-	})
 }
 
-func (s *BillingEntityServiceSuite) TestSubscriptionServesIntegrations() {
+func (s *BillingEntityServiceSuite) TestScopeToSubscription() {
 	env := types.GetEnvironmentID(s.GetContext())
 	s.ClearStores()
 	s.setMode(types.BillingEntityModeEnabled)
 	s.addEntity("be_default", env, "INV", true)
 	s.addEntity("be_eu", env, "EU", false)
 	s.addCustomer("c_eu", lo.ToPtr("be_eu"))
-	s.addCustomer("c_default", lo.ToPtr("be_default"))
 
 	ctx := s.GetContext()
-	for id, customerID := range map[string]string{"sub_eu": "c_eu", "sub_default": "c_default"} {
-		s.Require().NoError(s.GetStores().SubscriptionRepo.Create(ctx, &subscription.Subscription{
-			ID:            id,
-			CustomerID:    customerID,
-			EnvironmentID: env,
-			BaseModel:     types.GetDefaultBaseModel(ctx),
-		}))
+	s.Require().NoError(s.GetStores().SubscriptionRepo.Create(ctx, &subscription.Subscription{
+		ID:            "sub_eu",
+		CustomerID:    "c_eu",
+		EnvironmentID: env,
+		BaseModel:     types.GetDefaultBaseModel(ctx),
+	}))
+
+	scoped, err := s.service.ScopeToSubscription(ctx, "sub_eu")
+	s.Require().NoError(err)
+	s.Equal("be_eu", types.GetBillingEntityID(scoped))
+}
+
+func (s *BillingEntityServiceSuite) TestInScope_Customer() {
+	env := types.GetEnvironmentID(s.GetContext())
+
+	s.Run("off", func() {
+		s.ClearStores()
+		s.setMode(types.BillingEntityModeOff)
+
+		ok, err := s.service.InScope(types.SetBillingEntityID(s.GetContext(), "be_eu"), "c_missing")
+		s.Require().NoError(err)
+		s.True(ok)
+	})
+
+	tests := []struct {
+		name   string
+		entity string
+		want   bool
+	}{
+		{name: "no_entity_in_ctx", entity: "", want: true},
+		{name: "same", entity: "be_eu", want: true},
+		{name: "other", entity: "be_default", want: false},
 	}
 
-	served, err := s.service.SubscriptionServesIntegrations(ctx, "sub_eu")
-	s.Require().NoError(err)
-	s.False(served)
+	for _, tc := range tests {
+		s.Run(tc.name, func() {
+			s.ClearStores()
+			s.setMode(types.BillingEntityModeEnabled)
+			s.addEntity("be_default", env, "INV", true)
+			s.addEntity("be_eu", env, "EU", false)
+			s.addCustomer("c1", lo.ToPtr("be_eu"))
 
-	served, err = s.service.SubscriptionServesIntegrations(ctx, "sub_default")
-	s.Require().NoError(err)
-	s.True(served)
+			ctx := s.GetContext()
+			if tc.entity != "" {
+				ctx = types.SetBillingEntityID(ctx, tc.entity)
+			}
+			ok, err := s.service.InScope(ctx, "c1")
+			s.Require().NoError(err)
+			s.Equal(tc.want, ok)
+		})
+	}
+}
+
+func (s *BillingEntityServiceSuite) TestSetPreferredConnection() {
+	env := types.GetEnvironmentID(s.GetContext())
+
+	tests := []struct {
+		name     string
+		provider types.SecretProvider
+		owner    string
+		previous types.SecretProvider
+		wantErr  bool
+	}{
+		{name: "in_scope_gateway", provider: types.SecretProviderStripe, owner: "be_eu"},
+		{name: "out_of_scope_connection", provider: types.SecretProviderStripe, owner: "be_default", wantErr: true},
+		{name: "non_gateway_provider", provider: types.SecretProviderQuickBooks, owner: "be_eu", wantErr: true},
+		{name: "replaces_existing", provider: types.SecretProviderStripe, owner: "be_eu", previous: types.SecretProviderRazorpay},
+	}
+
+	for _, tc := range tests {
+		s.Run(tc.name, func() {
+			s.ClearStores()
+			s.setMode(types.BillingEntityModeEnabled)
+			s.addEntity("be_default", env, "INV", true)
+			s.addEntity("be_eu", env, "EU", false)
+			s.addCustomer("c1", lo.ToPtr("be_eu"))
+
+			ctx := s.GetContext()
+			stores := s.GetStores()
+			connect := func(provider types.SecretProvider, owner string) string {
+				conn := &connection.Connection{
+					ID:              "conn_" + string(provider),
+					Name:            string(provider),
+					ProviderType:    provider,
+					BillingEntityID: lo.ToPtr(owner),
+					EnvironmentID:   env,
+					BaseModel:       types.GetDefaultBaseModel(ctx),
+				}
+				s.Require().NoError(stores.ConnectionRepo.Create(ctx, conn))
+				return conn.ID
+			}
+			svc := NewCustomerService(ServiceParams{
+				Logger:                    s.GetLogger(),
+				DB:                        s.GetDB(),
+				TenantRepo:                stores.TenantRepo,
+				EnvironmentRepo:           stores.EnvironmentRepo,
+				CustomerRepo:              stores.CustomerRepo,
+				BillingEntityRepo:         stores.BillingEntityRepo,
+				ConnectionRepo:            stores.ConnectionRepo,
+				ConnectionAssociationRepo: stores.ConnectionAssociationRepo,
+			})
+
+			if tc.previous != "" {
+				_, err := svc.SetPreferredConnection(ctx, "c1", connect(tc.previous, tc.owner))
+				s.Require().NoError(err)
+			}
+			connectionID := connect(tc.provider, tc.owner)
+			resp, err := svc.SetPreferredConnection(ctx, "c1", connectionID)
+			if tc.wantErr {
+				s.Require().True(ierr.IsValidation(err), "expected validation error, got: %v", err)
+				s.Contains(err.Error(), "connection not allowed for customer")
+				return
+			}
+			s.Require().NoError(err)
+			s.Equal(connectionID, lo.FromPtr(resp.PreferredConnectionID))
+
+			filter := types.NewNoLimitConnectionAssociationFilter()
+			filter.EntityType = types.ConnectionAssociationEntityTypeCustomer
+			filter.EntityIDs = []string{"c1"}
+			associations, err := stores.ConnectionAssociationRepo.List(ctx, filter)
+			s.Require().NoError(err)
+			s.Require().Len(associations, 1)
+			s.Equal(connectionID, associations[0].ConnectionID)
+		})
+	}
 }

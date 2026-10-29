@@ -294,7 +294,7 @@ func (m *MoyasarConnectionMetadata) Validate() error {
 // PaddleConnectionMetadata represents Paddle-specific connection metadata
 type PaddleConnectionMetadata struct {
 	APIKey          string `json:"api_key"`           // Paddle API Key (encrypted)
-	WebhookSecret   string `json:"webhook_secret"`    // Paddle webhook secret (encrypted)
+	WebhookSecret   string `json:"webhook_secret"`    // Paddle webhook secret (encrypted, optional at create; webhooks are rejected until set)
 	ClientSideToken string `json:"client_side_token"` // Paddle.js client-side token (optional, encrypted)
 }
 
@@ -452,11 +452,6 @@ func (p *PaddleConnectionMetadata) Validate() error {
 			WithHint("Paddle API key is required").
 			Mark(ierr.ErrValidation)
 	}
-	if p.WebhookSecret == "" {
-		return ierr.NewError("webhook_secret is required").
-			WithHint("Paddle webhook secret is required for webhook verification").
-			Mark(ierr.ErrValidation)
-	}
 	return nil
 }
 
@@ -477,11 +472,6 @@ func (s *StripeConnectionMetadata) Validate() error {
 			WithHint("Stripe secret key is required").
 			Mark(ierr.ErrValidation)
 	}
-	if s.WebhookSecret == "" {
-		return ierr.NewError("webhook_secret is required").
-			WithHint("Stripe webhook secret is required").
-			Mark(ierr.ErrValidation)
-	}
 	return nil
 }
 
@@ -490,7 +480,7 @@ type WhopConnectionMetadata struct {
 	APIKey        string `json:"api_key"`              // Whop API key / Bearer token (encrypted)
 	CompanyID     string `json:"company_id"`           // Whop company ID (biz_...)
 	ProductID     string `json:"product_id,omitempty"` // Whop product ID (prod_...) - created on first sync if empty
-	WebhookSecret string `json:"webhook_secret"`       // Whop webhook signing secret (encrypted) - required to verify incoming webhooks
+	WebhookSecret string `json:"webhook_secret"`       // Whop webhook signing secret (encrypted, optional at create; webhooks are rejected until set)
 }
 
 // Validate validates the Whop connection metadata
@@ -503,11 +493,6 @@ func (w *WhopConnectionMetadata) Validate() error {
 	if w.CompanyID == "" {
 		return ierr.NewError("company_id is required").
 			WithHint("Whop company ID is required").
-			Mark(ierr.ErrValidation)
-	}
-	if w.WebhookSecret == "" {
-		return ierr.NewError("webhook_secret is required").
-			WithHint("Whop webhook secret is required").
 			Mark(ierr.ErrValidation)
 	}
 	return nil
@@ -834,6 +819,8 @@ type ConnectionFilter struct {
 	Sort          []*SortCondition   `json:"sort,omitempty" form:"sort" validate:"omitempty"`
 	ConnectionIDs []string           `json:"connection_ids,omitempty" form:"connection_ids" validate:"omitempty"`
 	ProviderType  SecretProvider     `json:"provider_type,omitempty" form:"provider_type" validate:"omitempty"`
+	// BillingEntityID keeps only connections owned by this billing entity
+	BillingEntityID string `json:"billing_entity_id,omitempty" form:"billing_entity_id" validate:"omitempty"`
 }
 
 // NewConnectionFilter creates a new ConnectionFilter with default values
