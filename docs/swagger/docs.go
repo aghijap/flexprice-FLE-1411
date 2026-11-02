@@ -4793,118 +4793,6 @@ const docTemplate = `{
                 "x-scope": "read"
             }
         },
-        "/customers/{id}/preferred-connection": {
-            "put": {
-                "security": [
-                    {
-                        "ApiKeyAuth": []
-                    }
-                ],
-                "description": "Use when a customer should be charged through a specific payment connection. The connection must be one the customer's billing entity can use; gateway choice prefers it while it stays usable.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Customers"
-                ],
-                "summary": "Set customer preferred connection",
-                "operationId": "setCustomerPreferredConnection",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Customer ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Preferred connection",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/SetPreferredConnectionRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/CustomerResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Invalid request or connection not allowed for customer",
-                        "schema": {
-                            "$ref": "#/definitions/errors.ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Customer not found",
-                        "schema": {
-                            "$ref": "#/definitions/errors.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Server error",
-                        "schema": {
-                            "$ref": "#/definitions/errors.ErrorResponse"
-                        }
-                    }
-                },
-                "x-scope": "write"
-            },
-            "delete": {
-                "security": [
-                    {
-                        "ApiKeyAuth": []
-                    }
-                ],
-                "description": "Use when a customer should no longer have a preferred payment connection and gateway choice should go back to the default flow.",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Customers"
-                ],
-                "summary": "Clear customer preferred connection",
-                "operationId": "clearCustomerPreferredConnection",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Customer ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/CustomerResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Customer not found",
-                        "schema": {
-                            "$ref": "#/definitions/errors.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Server error",
-                        "schema": {
-                            "$ref": "#/definitions/errors.ErrorResponse"
-                        }
-                    }
-                },
-                "x-scope": "write"
-            }
-        },
         "/customers/{id}/wallets": {
             "get": {
                 "security": [
@@ -23084,10 +22972,6 @@ const docTemplate = `{
                     "description": "Name is the name of the customer",
                     "type": "string"
                 },
-                "preferred_connection_id": {
-                    "description": "PreferredConnectionID is the customer's preferred payment connection; null when unset",
-                    "type": "string"
-                },
                 "status": {
                     "$ref": "#/definitions/types.Status"
                 },
@@ -28126,17 +28010,6 @@ const docTemplate = `{
                 },
                 "usage": {
                     "$ref": "#/definitions/CustomerUsageSummaryResponse"
-                }
-            }
-        },
-        "SetPreferredConnectionRequest": {
-            "type": "object",
-            "required": [
-                "connection_id"
-            ],
-            "properties": {
-                "connection_id": {
-                    "type": "string"
                 }
             }
         },

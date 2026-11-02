@@ -4400,10 +4400,6 @@ definitions:
       name:
         description: Name is the name of the customer
         type: string
-      preferred_connection_id:
-        description: PreferredConnectionID is the customer's preferred payment connection;
-          null when unset
-        type: string
       status:
         $ref: '#/definitions/types.Status'
       tax_treatment:
@@ -8024,13 +8020,6 @@ definitions:
         type: string
       usage:
         $ref: '#/definitions/CustomerUsageSummaryResponse'
-    type: object
-  SetPreferredConnectionRequest:
-    properties:
-      connection_id:
-        type: string
-    required:
-    - connection_id
     type: object
   SourceUsageItem:
     properties:
@@ -20090,82 +20079,6 @@ paths:
       tags:
       - Customers
       x-scope: read
-  /customers/{id}/preferred-connection:
-    delete:
-      description: Use when a customer should no longer have a preferred payment connection
-        and gateway choice should go back to the default flow.
-      operationId: clearCustomerPreferredConnection
-      parameters:
-      - description: Customer ID
-        in: path
-        name: id
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/CustomerResponse'
-        "404":
-          description: Customer not found
-          schema:
-            $ref: '#/definitions/errors.ErrorResponse'
-        "500":
-          description: Server error
-          schema:
-            $ref: '#/definitions/errors.ErrorResponse'
-      security:
-      - ApiKeyAuth: []
-      summary: Clear customer preferred connection
-      tags:
-      - Customers
-      x-scope: write
-    put:
-      consumes:
-      - application/json
-      description: Use when a customer should be charged through a specific payment
-        connection. The connection must be one the customer's billing entity can use;
-        gateway choice prefers it while it stays usable.
-      operationId: setCustomerPreferredConnection
-      parameters:
-      - description: Customer ID
-        in: path
-        name: id
-        required: true
-        type: string
-      - description: Preferred connection
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/SetPreferredConnectionRequest'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/CustomerResponse'
-        "400":
-          description: Invalid request or connection not allowed for customer
-          schema:
-            $ref: '#/definitions/errors.ErrorResponse'
-        "404":
-          description: Customer not found
-          schema:
-            $ref: '#/definitions/errors.ErrorResponse'
-        "500":
-          description: Server error
-          schema:
-            $ref: '#/definitions/errors.ErrorResponse'
-      security:
-      - ApiKeyAuth: []
-      summary: Set customer preferred connection
-      tags:
-      - Customers
-      x-scope: write
   /customers/{id}/wallets:
     get:
       consumes:
