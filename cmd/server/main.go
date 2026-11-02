@@ -189,7 +189,6 @@ func main() {
 			repository.NewCreditNoteRepository,
 			repository.NewCreditNoteLineItemRepository,
 			repository.NewConnectionRepository,
-			repository.NewConnectionAssociationRepository,
 			repository.NewEntityIntegrationMappingRepository,
 			repository.NewUsageRecordRepository,
 			repository.NewTaxRateRepository,

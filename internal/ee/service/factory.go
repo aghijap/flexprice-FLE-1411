@@ -15,7 +15,6 @@ import (
 	domainCheckout "github.com/flexprice/flexprice/internal/domain/checkout"
 	"github.com/flexprice/flexprice/internal/domain/commitment"
 	"github.com/flexprice/flexprice/internal/domain/connection"
-	"github.com/flexprice/flexprice/internal/domain/connectionassociation"
 	costsheet "github.com/flexprice/flexprice/internal/domain/costsheet"
 	"github.com/flexprice/flexprice/internal/domain/coupon"
 	"github.com/flexprice/flexprice/internal/domain/coupon_application"
@@ -135,7 +134,6 @@ type ServiceParams struct {
 	AddonRepo                    addon.Repository
 	AddonAssociationRepo         addonassociation.Repository
 	ConnectionRepo               connection.Repository
-	ConnectionAssociationRepo    connectionassociation.Repository
 	EntityIntegrationMappingRepo entityintegrationmapping.Repository
 	UsageRecordRepo              usagerecord.Repository
 	SettingsRepo                 settings.Repository
@@ -256,7 +254,6 @@ func NewServiceParams(
 	addonRepo addon.Repository,
 	addonAssociationRepo addonassociation.Repository,
 	connectionRepo connection.Repository,
-	connectionAssociationRepo connectionassociation.Repository,
 	entityIntegrationMappingRepo entityintegrationmapping.Repository,
 	settingsRepo settings.Repository,
 	alertLogsRepo alertlogs.Repository,
@@ -346,7 +343,6 @@ func NewServiceParams(
 		AddonRepo:                    addonRepo,
 		AddonAssociationRepo:         addonAssociationRepo,
 		ConnectionRepo:               connectionRepo,
-		ConnectionAssociationRepo:    connectionAssociationRepo,
 		EntityIntegrationMappingRepo: entityIntegrationMappingRepo,
 		UsageRecordRepo:              usageRecordRepo,
 		SettingsRepo:                 settingsRepo,
